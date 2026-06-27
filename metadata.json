@@ -1,6 +1,6 @@
 {
   "name": "Rush Baggage Wizard",
   "description": "Airline baggage management system for arrivals, customs clearance, disposition, and storage tracking.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

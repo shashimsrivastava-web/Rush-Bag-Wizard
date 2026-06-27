@@ -33,8 +33,12 @@ import {
   Sparkles,
   HelpCircle,
   RefreshCw,
-  Settings
+  Settings,
+  Camera
 } from 'lucide-react';
+
+import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
+import ScannerModal from './components/ScannerModal';
 
 // Interfaces based on BDO Format
 interface BaggageRecord {
@@ -51,18 +55,21 @@ interface BaggageRecord {
   remarks: string;
   storageRemarks?: string; // Remarks in Storage Location
   
+  // Registry
+  registryType: 'Arrival' | 'Departure';
+
   // Operational States
   status: 'Expected' | 'Received';
   receivedAt?: string; // ISO String (can be backdated for testing alerts)
   
-  // Customs State
+  // Customs State (Arrival Only)
   customsStatus: 'Pending' | 'Cleared' | 'Not Cleared' | 'Marked Preventive';
   customsReason?: 'Lack of documents' | 'Awaiting documents' | 'Refused' | 'Deferred' | 'Preventive' | '';
   customsUpdatedAt?: string;
   
   // Disposition / Location State
-  disposition: 'Pending' | 'Storage' | 'Delivered' | 'Forwarded' | 'Belt 9' | 'Handover' | 'CWC' | 'Re-export';
-  dispositionLocation?: 'Belt 9' | 'LHG Office' | 'BMA' | 'Level 4 Checks' | 'CWC' | 'VVM' | 'Outlook' | 'Advik' | 'Air India' | 'Indigo' | 'Spice Jet' | 'Hub Re-export' | 'Other Airline' | '';
+  disposition: 'Pending' | 'Storage' | 'Delivered' | 'Forwarded' | 'Belt 9' | 'Handover' | 'CWC' | 'Re-export' | 'Awaiting Forwarding' | 'Forwarded on LHG Flight' | 'Collected by Passenger' | 'Returned to Airline' | 'Other';
+  dispositionLocation?: 'Belt 9' | 'LHG Office' | 'BMA' | 'Level 4 Checks' | 'CWC' | 'VVM' | 'Outlook' | 'Advik' | 'Air India' | 'Indigo' | 'Spice Jet' | 'Hub Re-export' | 'Other Airline' | 'Level 4' | '';
   dispositionUpdatedAt?: string;
   
   createdAt: string;
@@ -78,6 +85,14 @@ interface BaggageRecord {
   handoverOption?: 'Partner Airlines' | '';
   warehouseOption?: 'CWC Warehouse' | '';
   reexportOption?: 'Re-export to Carrier Hub' | '';
+
+  // Departure Forwarding Fields
+  forwardingFlightNo?: string;
+  forwardingDate?: string;
+  forwardingDestination?: string;
+  forwardedBy?: string;
+  forwardingRemarks?: string;
+  specificStorageLocation?: string;
 }
 
 interface DictionaryEntry {
@@ -96,12 +111,20 @@ const DEFAULT_MAPPING_DICTIONARY: DictionaryEntry[] = [
   { field: 'pir', label: 'PIR Number', aliases: ['pir', 'pir no', 'pir number', 'pir ref', 'reference', 'pirnumber', 'report number', 'irregularity report'], isMandatory: true, description: 'Property Irregularity Report (e.g. BOMEK12345)' },
   { field: 'weight', label: 'Weight (kg)', aliases: ['weight', 'wt', 'kg', 'kgs', 'weight kg', 'bag weight'], isMandatory: false, description: 'Baggage weight in kilograms (leave blank if not mentioned)' },
   { field: 'damaged', label: 'Damaged', aliases: ['damage', 'damaged', 'dmg', 'damage yn', 'condition', 'is damaged'], isMandatory: true, description: 'Damaged indicator (Y/N)' },
-  { field: 'ln', label: 'Locked (L/N)', aliases: ['locked', 'lock', 'l/n', 'ln', 'lock status', 'locked status'], isMandatory: false, description: 'Locked indicator (free text such as PAD, CL, Y, N)' },
+  { field: 'ln', label: 'Locked', aliases: ['locked', 'lock', 'l/n', 'ln', 'lock status', 'locked status', 'l.n'], isMandatory: false, description: 'Locked indicator (free text such as PAD, CL, Y, N)' },
   { field: 'destination', label: 'Destination', aliases: ['dest', 'destination', 'airport', 'dest code', 'station'], isMandatory: false, description: 'Three-letter airport code (e.g. BOM)' },
   { field: 'seal', label: 'Seal', aliases: ['seal', 'seal number', 'seal#', 'seals'], isMandatory: false, description: 'Customs or airline security seal number' },
   { field: 'remarks', label: 'Remarks', aliases: ['remark', 'remarks', 'notes', 'comment', 'comments', 'additional details'], isMandatory: false, description: 'Custom text remarks or instructions' },
   { field: 'protocol', label: 'Customs Protocol', aliases: ['protocol', 'customs protocol', 'disposition protocol', 'ops protocol', 'workflow protocol'], isMandatory: true, description: 'Cleared Baggage or Non-Cleared / Other' }
 ];
+
+const DEFAULT_LOCK_DICTIONARY: Record<string, string> = {
+  'CL': 'Combination Lock',
+  'PAD': 'Padlock',
+  'Y': 'Yes',
+  'N': 'No',
+  'SEAL': 'Sealed'
+};
 
 function getSimilarityScore(s1: string, s2: string): number {
   const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -150,6 +173,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     status: 'Expected',
     customsStatus: 'Pending',
     disposition: 'Pending',
+    registryType: 'Arrival',
     createdAt: new Date().toISOString()
   },
   {
@@ -173,6 +197,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     disposition: 'Storage',
     dispositionLocation: 'LHG Office',
     dispositionUpdatedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    registryType: 'Arrival',
     createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString()
   },
   {
@@ -195,6 +220,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     disposition: 'Delivered',
     dispositionLocation: 'VVM',
     dispositionUpdatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    registryType: 'Arrival',
     createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
   },
   {
@@ -218,6 +244,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     disposition: 'Storage',
     dispositionLocation: 'CWC',
     dispositionUpdatedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+    registryType: 'Arrival',
     createdAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
   },
   {
@@ -236,6 +263,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     status: 'Expected',
     customsStatus: 'Pending',
     disposition: 'Pending',
+    registryType: 'Arrival',
     createdAt: new Date().toISOString()
   },
   {
@@ -258,6 +286,7 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     disposition: 'Delivered',
     dispositionLocation: 'Outlook',
     dispositionUpdatedAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(), // 9 days ago - eligible for Auto-Purge
+    registryType: 'Arrival',
     createdAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString()
   }
 ];
@@ -357,6 +386,7 @@ export default function RushBaggageWizard() {
   // Mobile-first collapsible navigation state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<'dashboard' | 'scanner' | 'protocol' | 'registry'>('dashboard');
+  const [activeRegistry, setActiveRegistry] = useState<'Arrival' | 'Departure' | 'Combined'>('Combined');
 
   // Stable date reference to keep rendering pure
   const [now] = useState(() => Date.now());
@@ -392,10 +422,10 @@ export default function RushBaggageWizard() {
     name: '',
     originalTag: '',
     rushTag: '',
-    flightNo: 'LH760',
+    flightNo: '',
     seal: '',
     ln: '', // Default Locked representation is empty (free text)
-    destination: 'BOM',
+    destination: '',
     remarks: '',
     storageRemarks: '',
     status: 'Expected',
@@ -423,11 +453,82 @@ export default function RushBaggageWizard() {
   // Single Edit Dialog state
   const [editingRecord, setEditingRecord] = useState<BaggageRecord | null>(null);
 
+  // Configurable IATA Airline Map state
+  const [iataAirlineMap, setIataAirlineMap] = useState<Record<string, string>>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('rbw_iata_airline_map');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) {}
+      }
+    }
+    return DEFAULT_IATA_AIRLINE_MAP;
+  });
+
+  const saveIataAirlineMap = (newMap: Record<string, string>) => {
+    setIataAirlineMap(newMap);
+    localStorage.setItem('rbw_iata_airline_map', JSON.stringify(newMap));
+  };
+
+  // Bulk Add Session States
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [bulkTagsInput, setBulkTagsInput] = useState('');
+  const [bulkProtocol, setBulkProtocol] = useState<'Cleared Baggage' | 'Non-Cleared / Other' | ''>('');
+  const [bulkClearedAction, setBulkClearedAction] = useState<string>('');
+  const [bulkNonClearedAction, setBulkNonClearedAction] = useState<string>('');
+
+  const [bulkDeliveryAgent, setBulkDeliveryAgent] = useState<'VVM' | 'Outlook' | 'Advik' | ''>('VVM');
+  const [bulkStorageOption, setBulkStorageOption] = useState<'Standard Warehousing – LHG Office' | ''>('Standard Warehousing – LHG Office');
+  const [bulkDomesticForwarding, setBulkDomesticForwarding] = useState<'Air India' | 'IndiGo' | 'SpiceJet' | 'No Forwarding' | ''>('No Forwarding');
+  const [bulkArrivalBelt, setBulkArrivalBelt] = useState<'Arrival Belt 9' | ''>('Arrival Belt 9');
+  const [bulkHandoverOption, setBulkHandoverOption] = useState<'Partner Airlines' | ''>('Partner Airlines');
+  const [bulkWarehouseOption, setBulkWarehouseOption] = useState<'CWC Warehouse' | ''>('CWC Warehouse');
+  const [bulkReexportOption, setBulkReexportOption] = useState<'Re-export to Carrier Hub' | ''>('Re-export to Carrier Hub');
+
+  const [bulkFlightNo, setBulkFlightNo] = useState<string>('');
+  const [bulkDestination, setBulkDestination] = useState<string>('');
+  const [bulkDamaged, setBulkDamaged] = useState<'Y' | 'N'>('N');
+  const [bulkWeight, setBulkWeight] = useState<number | undefined>(undefined);
+  const [bulkSeal, setBulkSeal] = useState<string>('');
+  const [bulkLn, setBulkLn] = useState<string>('');
+  const [bulkStatus, setBulkStatus] = useState<'Expected' | 'Received'>('Expected');
+
+  // Scanner states
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerTargetField, setScannerTargetField] = useState<'originalTag' | 'rushTag' | 'bulk'>('originalTag');
+  const [continuousScannedTags, setContinuousScannedTags] = useState<string[]>([]);
+
+  // Duplicate resolution state
+  const [bulkDuplicatesList, setBulkDuplicatesList] = useState<Array<{
+    tag: string;
+    isExistingInDb: boolean;
+    existingRecord?: BaggageRecord;
+    resolution: 'skip' | 'replace' | 'keep';
+  }>>([]);
+  const [showDuplicatesResolver, setShowDuplicatesResolver] = useState(false);
+
   // Two-level cascading protocol states
   const [newBagClearedAction, setNewBagClearedAction] = useState<string>('');
   const [newBagNonClearedAction, setNewBagNonClearedAction] = useState<string>('');
   const [editingClearedAction, setEditingClearedAction] = useState<string>('');
   const [editingNonClearedAction, setEditingNonClearedAction] = useState<string>('');
+
+  const handleScanSuccess = (barcode: string) => {
+    if (scannerTargetField === 'bulk') {
+      setContinuousScannedTags(prev => {
+        const next = [...prev, barcode];
+        setBulkTagsInput(next.join('\n'));
+        return next;
+      });
+    } else if (scannerTargetField === 'originalTag') {
+      setNewBag(prev => ({ ...prev, originalTag: barcode }));
+    } else if (scannerTargetField === 'rushTag') {
+      setNewBag(prev => ({ ...prev, rushTag: barcode }));
+    }
+  };
+
+  const handleFinishContinuous = () => {
+    setIsScannerOpen(false);
+  };
 
   const handleOpenEditDialog = (record: BaggageRecord | null) => {
     setEditingRecord(record);
@@ -512,12 +613,40 @@ export default function RushBaggageWizard() {
     skipped: number,
     duplicates: number,
     invalid: number,
+    blankWeights: number,
+    invalidWeights: number,
+    recognizedLocks: number,
+    unrecognizedLocks: number,
     warnings: string[]
   } | null>(null);
 
   const [newAliasField, setNewAliasField] = useState<string>('');
   const [newAliasValue, setNewAliasValue] = useState<string>('');
   const [showDictionaryEditor, setShowDictionaryEditor] = useState(false);
+
+  // Lock Mapping Dictionary States
+  const [lockDictionary, setLockDictionary] = useState<Record<string, string>>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('rbw_lock_dictionary');
+      if (stored) {
+        try {
+          return JSON.parse(stored);
+        } catch (e) {
+          // Fallback
+        }
+      }
+    }
+    return DEFAULT_LOCK_DICTIONARY;
+  });
+
+  const saveLockDictionary = (newDict: Record<string, string>) => {
+    setLockDictionary(newDict);
+    localStorage.setItem('rbw_lock_dictionary', JSON.stringify(newDict));
+  };
+
+  const [showLockDictionaryEditor, setShowLockDictionaryEditor] = useState(false);
+  const [newLockAbbr, setNewLockAbbr] = useState('');
+  const [newLockExpanded, setNewLockExpanded] = useState('');
 
   // System status flags
   const [purgeAlertCount, setPurgeAlertCount] = useState(0);
@@ -627,22 +756,23 @@ export default function RushBaggageWizard() {
 
   // Compute stats for Dashboard
   const stats = useMemo(() => {
-    const totalExpected = baggageList.length;
-    const arrived = baggageList.filter(b => b.status === 'Received').length;
-    const nonArrivals = baggageList.filter(b => b.status === 'Expected').length;
-    const cleared = baggageList.filter(b => b.status === 'Received' && b.customsStatus === 'Cleared').length;
-    const notCleared = baggageList.filter(b => b.status === 'Received' && (b.customsStatus === 'Not Cleared' || b.customsStatus === 'Marked Preventive')).length;
+    const filteredBaggageList = baggageList.filter(item => activeRegistry === 'Combined' || item.registryType === activeRegistry);
+    const totalExpected = filteredBaggageList.length;
+    const arrived = filteredBaggageList.filter(b => b.status === 'Received').length;
+    const nonArrivals = filteredBaggageList.filter(b => b.status === 'Expected').length;
+    const cleared = filteredBaggageList.filter(b => b.status === 'Received' && b.customsStatus === 'Cleared').length;
+    const notCleared = filteredBaggageList.filter(b => b.status === 'Received' && (b.customsStatus === 'Not Cleared' || b.customsStatus === 'Marked Preventive')).length;
 
     // Location counters
-    const belt9 = baggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'Belt 9').length;
-    const lhgOffice = baggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'LHG Office').length;
-    const bma = baggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'BMA').length;
-    const level4Checks = baggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'Level 4 Checks').length;
-    const cwc = baggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'CWC').length;
+    const belt9 = filteredBaggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'Belt 9').length;
+    const lhgOffice = filteredBaggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'LHG Office').length;
+    const bma = filteredBaggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'BMA').length;
+    const level4Checks = filteredBaggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'Level 4 Checks').length;
+    const cwc = filteredBaggageList.filter(b => b.status === 'Received' && b.dispositionLocation === 'CWC').length;
 
     // Total alerts count (3 days and 5 days)
-    const alert3Days = baggageList.filter(b => getDaysInStorage(b) >= 3 && getDaysInStorage(b) < 5).length;
-    const alert5Days = baggageList.filter(b => getDaysInStorage(b) >= 5).length;
+    const alert3Days = filteredBaggageList.filter(b => getDaysInStorage(b) >= 3 && getDaysInStorage(b) < 5).length;
+    const alert5Days = filteredBaggageList.filter(b => getDaysInStorage(b) >= 5).length;
 
     return {
       totalExpected,
@@ -660,7 +790,7 @@ export default function RushBaggageWizard() {
       alert3Days,
       alert5Days
     };
-  }, [baggageList, getDaysInStorage]);
+  }, [baggageList, activeRegistry, getDaysInStorage]);
 
   // Scanner/Reconciliation Matcher
   const handleScanSubmit = (e: React.FormEvent) => {
@@ -668,10 +798,10 @@ export default function RushBaggageWizard() {
     const query = scannerInput.trim().toUpperCase();
     if (!query) return;
 
-    // Try finding bag by Original Tag, Rush Tag, or PIR
+    // Try finding bag by Original Tag, Rush Tag, or PIR with intelligent IATA recognition
     const index = baggageList.findIndex(b => 
-      (b.originalTag && b.originalTag.toUpperCase() === query) ||
-      (b.rushTag && b.rushTag.toUpperCase() === query) ||
+      (b.originalTag && matchTag(b.originalTag, query, iataAirlineMap)) ||
+      (b.rushTag && matchTag(b.rushTag, query, iataAirlineMap)) ||
       (b.pir && b.pir.toUpperCase() === query)
     );
 
@@ -694,7 +824,7 @@ export default function RushBaggageWizard() {
         };
         saveBaggageData(updated);
         setScannerNotification({
-          text: `SUCCESS: Marked ${match.name}'s bag (${query}) as RECEIVED. Placed in storage at LHG Office.`,
+          text: `SUCCESS: Marked ${match.name}'s bag (${getCanonicalTag(query, iataAirlineMap)}) as RECEIVED. Placed in storage at LHG Office.`,
           type: 'success'
         });
       }
@@ -703,12 +833,14 @@ export default function RushBaggageWizard() {
         text: `TAG NOT FOUND: '${query}' was not in the expected manifest. You can manually register it below.`,
         type: 'error'
       });
-      // prefill the tag in manual entry
+      // prefill the tag in manual entry using canonical representation
+      const canonicalQuery = getCanonicalTag(query, iataAirlineMap);
+      const isLikelyRush = query.startsWith('LX') || /^[A-Z]{2}\d+$/.test(canonicalQuery);
       setNewBag(prev => ({
         ...prev,
-        pir: query.startsWith('BOM') || query.startsWith('DEL') ? query : `PIR_${query}`,
-        originalTag: !query.startsWith('BOM') && !query.startsWith('DEL') && !query.startsWith('LX') ? query : '',
-        rushTag: query.startsWith('LX') ? query : ''
+        pir: query.startsWith('BOM') || query.startsWith('DEL') ? query : '',
+        originalTag: !query.startsWith('BOM') && !query.startsWith('DEL') && !isLikelyRush ? canonicalQuery : '',
+        rushTag: isLikelyRush ? canonicalQuery : ''
       }));
       setShowAddForm(true);
     }
@@ -723,12 +855,14 @@ export default function RushBaggageWizard() {
       alert('Flight No is required');
       return;
     }
-    if (!newBag.name) {
-      alert('Passenger Name is required');
-      return;
-    }
-    if (!newBag.pir) {
-      alert('PIR Number is required');
+
+    const hasOriginalTag = !!(newBag.originalTag && newBag.originalTag.trim());
+    const hasRushTag = !!(newBag.rushTag && newBag.rushTag.trim());
+    const hasName = !!(newBag.name && newBag.name.trim());
+    const hasPir = !!(newBag.pir && newBag.pir.trim());
+
+    if (!hasOriginalTag && !hasRushTag && !hasName && !hasPir) {
+      alert('Please enter at least one identifying field:\nOriginal Tag, Rush Tag, Passenger Name or PIR Number.');
       return;
     }
 
@@ -738,70 +872,25 @@ export default function RushBaggageWizard() {
       return;
     }
 
-    // Damaged validation
-    if (!newBag.damaged) {
-      alert('Damaged status is required');
-      return;
-    }
+    // Assign a default protocol and default sub-actions to ensure save succeeds without blocks
+    const finalProtocol = newBag.protocol || 'Cleared Baggage';
+    const finalClearedAction = newBagClearedAction || 'deliveryAgent';
+    const finalNonClearedAction = newBagNonClearedAction || 'arrivalBelt';
 
-    // Protocol validation
-    if (!newBag.protocol) {
-      alert('Dispositions & Customs Operations Protocol is required');
-      return;
-    }
-
-    // Dynamic fields validation when visible (only visible fields are mandatory)
-    if (newBag.protocol === 'Cleared Baggage') {
-      if (!newBagClearedAction) {
-        alert('Cleared Baggage Action is required');
-        return;
-      }
-      if (newBagClearedAction === 'deliveryAgent' && !newBag.deliveryAgent) {
-        alert('Delivery Agent is required');
-        return;
-      }
-      if (newBagClearedAction === 'storage' && !newBag.storageOption) {
-        alert('Storage Location is required');
-        return;
-      }
-      if (newBagClearedAction === 'domesticForwarding' && !newBag.domesticForwarding) {
-        alert('Forward Via is required');
-        return;
-      }
-    } else if (newBag.protocol === 'Non-Cleared / Other') {
-      if (!newBagNonClearedAction) {
-        alert('Non-Cleared / Other Action is required');
-        return;
-      }
-      if (newBagNonClearedAction === 'arrivalBelt' && !newBag.arrivalBelt) {
-        alert('Arrival Belt is required');
-        return;
-      }
-      if (newBagNonClearedAction === 'handover' && !newBag.handoverOption) {
-        alert('Handover option is required');
-        return;
-      }
-      if (newBagNonClearedAction === 'warehouse' && !newBag.warehouseOption) {
-        alert('Warehouse option is required');
-        return;
-      }
-      if (newBagNonClearedAction === 'reexport' && !newBag.reexportOption) {
-        alert('Re-export option is required');
-        return;
-      }
-    }
+    const canonicalOriginalTag = getCanonicalTag(newBag.originalTag || '', iataAirlineMap);
+    const canonicalRushTag = getCanonicalTag(newBag.rushTag || '', iataAirlineMap);
 
     const createdRecord: BaggageRecord = {
       id: `bag-${Date.now()}`,
       sno: (baggageList.length + 1).toString(), // Auto-assign sno, remove from form
-      pir: (newBag.pir || '').toUpperCase(),
-      name: (newBag.name || '').toUpperCase(),
-      originalTag: (newBag.originalTag || '').trim(),
-      rushTag: (newBag.rushTag || '').toUpperCase(),
-      flightNo: newBag.flightNo || 'LH760',
+      pir: (newBag.pir || '').toUpperCase() || 'UNKNOWN PIR',
+      name: (newBag.name || '').toUpperCase() || 'UNKNOWN PASSENGER',
+      originalTag: canonicalOriginalTag,
+      rushTag: canonicalRushTag,
+      flightNo: newBag.flightNo || '',
       seal: (newBag.seal || '').toUpperCase(),
       ln: newBag.ln || '', // Free text for Locked indicator (such as PAD, CL, Y, N)
-      destination: (newBag.destination || 'BOM').toUpperCase(),
+      destination: (newBag.destination || '').toUpperCase(),
       remarks: newBag.remarks || 'Additional manually registered bag',
       storageRemarks: newBag.storageRemarks || '',
       status: newBag.status as 'Expected' | 'Received',
@@ -812,19 +901,20 @@ export default function RushBaggageWizard() {
       disposition: newBag.status === 'Received' ? 'Storage' : 'Pending',
       dispositionLocation: newBag.status === 'Received' ? 'LHG Office' : '',
       dispositionUpdatedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
+      registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry,
       createdAt: new Date().toISOString(),
 
       // New properties
       weight: newBag.weight !== undefined && !isNaN(Number(newBag.weight)) ? Number(newBag.weight) : undefined,
-      damaged: newBag.damaged as 'Y' | 'N',
-      protocol: newBag.protocol as 'Cleared Baggage' | 'Non-Cleared / Other',
-      deliveryAgent: (newBag.protocol === 'Cleared Baggage' && newBagClearedAction === 'deliveryAgent') ? newBag.deliveryAgent as any : undefined,
-      storageOption: (newBag.protocol === 'Cleared Baggage' && newBagClearedAction === 'storage') ? newBag.storageOption as any : undefined,
-      domesticForwarding: (newBag.protocol === 'Cleared Baggage' && newBagClearedAction === 'domesticForwarding') ? newBag.domesticForwarding as any : undefined,
-      arrivalBelt: (newBag.protocol === 'Non-Cleared / Other' && newBagNonClearedAction === 'arrivalBelt') ? newBag.arrivalBelt as any : undefined,
-      handoverOption: (newBag.protocol === 'Non-Cleared / Other' && newBagNonClearedAction === 'handover') ? newBag.handoverOption as any : undefined,
-      warehouseOption: (newBag.protocol === 'Non-Cleared / Other' && newBagNonClearedAction === 'warehouse') ? newBag.warehouseOption as any : undefined,
-      reexportOption: (newBag.protocol === 'Non-Cleared / Other' && newBagNonClearedAction === 'reexport') ? newBag.reexportOption as any : undefined
+      damaged: (newBag.damaged || 'N') as 'Y' | 'N',
+      protocol: finalProtocol as 'Cleared Baggage' | 'Non-Cleared / Other',
+      deliveryAgent: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'deliveryAgent') ? (newBag.deliveryAgent || 'VVM') as any : undefined,
+      storageOption: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'storage') ? (newBag.storageOption || 'Standard Warehousing – LHG Office') as any : undefined,
+      domesticForwarding: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'domesticForwarding') ? (newBag.domesticForwarding || 'No Forwarding') as any : undefined,
+      arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'arrivalBelt') ? (newBag.arrivalBelt || 'Arrival Belt 9') as any : undefined,
+      handoverOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'handover') ? (newBag.handoverOption || 'Partner Airlines') as any : undefined,
+      warehouseOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'warehouse') ? (newBag.warehouseOption || 'CWC Warehouse') as any : undefined,
+      reexportOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'reexport') ? (newBag.reexportOption || 'Re-export to Carrier Hub') as any : undefined
     };
 
     saveBaggageData([createdRecord, ...baggageList]);
@@ -858,6 +948,170 @@ export default function RushBaggageWizard() {
     setNewBagClearedAction('');
     setNewBagNonClearedAction('');
     setForwardingRequired(false);
+  };
+
+  // Parses a string with potential delimiters (spaces, commas, tabs, newlines) into individual tags
+  const parseBulkInput = (text: string): string[] => {
+    const rawTokens = text.split(/[\s,\t\r\n]+/);
+    return rawTokens.map(t => t.trim()).filter(t => t.length > 0);
+  };
+
+  const handleProcessBulkAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    const tags = parseBulkInput(bulkTagsInput);
+    if (tags.length === 0) {
+      alert('Please enter or scan at least one baggage tag number.');
+      return;
+    }
+
+    // Check for duplicates
+    const detectedDuplicates: Array<{
+      tag: string;
+      isExistingInDb: boolean;
+      existingRecord?: BaggageRecord;
+      resolution: 'skip' | 'replace' | 'keep';
+    }> = [];
+
+    const uniqueTagsInSession = new Set<string>();
+
+    tags.forEach(tag => {
+      const canonicalTag = getCanonicalTag(tag, iataAirlineMap);
+      
+      const isSessionDup = uniqueTagsInSession.has(canonicalTag);
+      uniqueTagsInSession.add(canonicalTag);
+
+      const existingRecord = baggageList.find(b => 
+        (b.originalTag && matchTag(b.originalTag, canonicalTag, iataAirlineMap)) ||
+        (b.rushTag && matchTag(b.rushTag, canonicalTag, iataAirlineMap))
+      );
+
+      if (isSessionDup || existingRecord) {
+        if (!detectedDuplicates.some(d => d.tag === canonicalTag)) {
+          detectedDuplicates.push({
+            tag: canonicalTag,
+            isExistingInDb: !!existingRecord,
+            existingRecord,
+            resolution: 'skip'
+          });
+        }
+      }
+    });
+
+    if (detectedDuplicates.length > 0) {
+      setBulkDuplicatesList(detectedDuplicates);
+      setShowDuplicatesResolver(true);
+    } else {
+      saveBulkRecords(tags, []);
+    }
+  };
+
+  const saveBulkRecords = (allTags: string[], resolvedDuplicates: typeof bulkDuplicatesList) => {
+    const finalRecords: BaggageRecord[] = [];
+    const processedCanonicalTags = new Set<string>();
+
+    const tagsToSkip = new Set(resolvedDuplicates.filter(d => d.resolution === 'skip').map(d => d.tag));
+    const tagsToReplace = resolvedDuplicates.filter(d => d.resolution === 'replace');
+    const tagsToKeep = new Set(resolvedDuplicates.filter(d => d.resolution === 'keep').map(d => d.tag));
+
+    allTags.forEach(tag => {
+      const canonical = getCanonicalTag(tag, iataAirlineMap);
+      
+      if (tagsToSkip.has(canonical)) {
+        return;
+      }
+
+      const isReplace = tagsToReplace.some(d => d.tag === canonical);
+      if (isReplace && !tagsToKeep.has(canonical)) {
+        return;
+      }
+
+      if (processedCanonicalTags.has(canonical) && !tagsToKeep.has(canonical)) {
+        return;
+      }
+      processedCanonicalTags.add(canonical);
+
+      const finalProtocol = bulkProtocol || 'Cleared Baggage';
+      const isReceived = bulkStatus === 'Received';
+      
+      const record: BaggageRecord = {
+        id: `bag-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+        sno: (baggageList.length + finalRecords.length + 1).toString(),
+        pir: 'UNKNOWN PIR',
+        name: 'UNKNOWN PASSENGER',
+        originalTag: canonical,
+        rushTag: '',
+        flightNo: bulkFlightNo,
+        seal: bulkSeal.toUpperCase(),
+        ln: bulkLn,
+        destination: bulkDestination.toUpperCase() || 'BOM',
+        remarks: `Bulk registered during session (${new Date().toLocaleDateString()})`,
+        storageRemarks: '',
+        status: bulkStatus,
+        receivedAt: isReceived ? new Date().toISOString() : undefined,
+        customsStatus: 'Pending',
+        customsUpdatedAt: isReceived ? new Date().toISOString() : undefined,
+        disposition: isReceived ? 'Storage' : 'Pending',
+        dispositionLocation: isReceived ? 'LHG Office' : '',
+        dispositionUpdatedAt: isReceived ? new Date().toISOString() : undefined,
+        createdAt: new Date().toISOString(),
+
+        weight: bulkWeight,
+        damaged: bulkDamaged,
+        protocol: finalProtocol as any,
+        deliveryAgent: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
+        storageOption: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
+        domesticForwarding: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
+        arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
+        handoverOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
+        warehouseOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
+        reexportOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined,
+        registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry
+      };
+
+      finalRecords.push(record);
+    });
+
+    const updatedDbList = baggageList.map(item => {
+      const matchReplacement = tagsToReplace.find(d => 
+        (item.originalTag && matchTag(item.originalTag, d.tag, iataAirlineMap)) ||
+        (item.rushTag && matchTag(item.rushTag, d.tag, iataAirlineMap))
+      );
+
+      if (matchReplacement) {
+        const finalProtocol = bulkProtocol || 'Cleared Baggage';
+        const isReceived = bulkStatus === 'Received';
+
+        return {
+          ...item,
+          flightNo: bulkFlightNo,
+          seal: bulkSeal.toUpperCase() || item.seal,
+          ln: bulkLn || item.ln,
+          destination: bulkDestination.toUpperCase() || item.destination,
+          status: bulkStatus,
+          receivedAt: isReceived ? (item.receivedAt || new Date().toISOString()) : item.receivedAt,
+          weight: bulkWeight !== undefined ? bulkWeight : item.weight,
+          damaged: bulkDamaged !== undefined ? bulkDamaged : item.damaged,
+          protocol: finalProtocol as any,
+          deliveryAgent: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
+          storageOption: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
+          domesticForwarding: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
+          arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
+          handoverOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
+          warehouseOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
+          reexportOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined
+        };
+      }
+      return item;
+    });
+
+    saveBaggageData([...finalRecords, ...updatedDbList]);
+    
+    setShowAddForm(false);
+    setShowDuplicatesResolver(false);
+    setBulkTagsInput('');
+    setContinuousScannedTags([]);
+    setBulkDuplicatesList([]);
+    alert(`Successfully registered ${finalRecords.length} new records and updated ${tagsToReplace.length} existing records!`);
   };
 
   // Single record editing update
@@ -1133,12 +1387,28 @@ export default function RushBaggageWizard() {
         const headerVal = headers[colIdx];
         const cleanHeader = headerVal.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+        // Determine if this is a sequence/ID/Serial Number column to prevent incorrect auto-mapping to Weight
+        const isSerialOrNoColumn = /^(sno|s\.no|serial|seq|id|index|no\d*|num)$/i.test(headerVal.trim().toLowerCase()) || /serial/i.test(headerVal);
+
+        if (isSerialOrNoColumn) {
+          mappings[colIdx] = {
+            systemField: 'ignore',
+            confidence: 100,
+            matchedBy: 'header'
+          };
+          continue;
+        }
+
         let bestField = 'ignore';
         let bestConfidence = 0;
         let bestMatchedBy: 'header' | 'semantic' | 'manual' = 'header';
 
         // 3a. Header Aliases Matching
         mappingDictionary.forEach(entry => {
+          // If the entry is weight, and it's a serial column, don't map
+          if (entry.field === 'weight' && isSerialOrNoColumn) {
+            return;
+          }
           entry.aliases.forEach(alias => {
             const score = getSimilarityScore(cleanHeader, alias);
             const confPercent = Math.round(score * 100);
@@ -1187,8 +1457,8 @@ export default function RushBaggageWizard() {
             // Damaged (Y/N/Yes/No)
             if (/^(y|n|yes|no|true|false)$/i.test(val)) matchStats.damaged++;
             
-            // Locked (Yes/No/True/False/L01/L02)
-            if (/^(y|n|yes|no|true|false|l\d{2})$/i.test(val)) matchStats.ln++;
+            // Locked (Yes/No/True/False/L01/L02 or free text like PAD, CL, SEAL, combination, padlock, sealed, tsa, zip, cable, tape, wrap, string, none, custom, security strap)
+            if (/^(y|n|yes|no|true|false|l\d{2}|pad|cl|seal|padlock|combination lock|sealed|tsa|zip|cable|tape|wrap|string|none|custom|security|locked)$/i.test(val)) matchStats.ln++;
 
             // Destination (3-letter)
             if (/^[A-Z]{3}$/i.test(val)) matchStats.destination++;
@@ -1214,6 +1484,9 @@ export default function RushBaggageWizard() {
 
           // Compare semantic match to find high-probability fields
           Object.entries(semanticRates).forEach(([field, rate]) => {
+            if (field === 'weight' && isSerialOrNoColumn) {
+              return;
+            }
             if (rate > 0.4) {
               const semConf = Math.round(rate * 85);
               // If semantic confidence is stronger than header confidence, promote it
@@ -1263,6 +1536,13 @@ export default function RushBaggageWizard() {
     let skippedCount = 0;
     let updatedCount = 0;
     let invalidCount = 0;
+    
+    // Additional metrics for custom requirements
+    let blankWeightCount = 0;
+    let invalidWeightCount = 0;
+    let recognizedLockCount = 0;
+    let unrecognizedLockCount = 0;
+
     const warningList: string[] = [];
 
     // Map system fields to Excel indices
@@ -1318,18 +1598,28 @@ export default function RushBaggageWizard() {
         hasWarning = true;
       }
 
-      // Validate weight format (left blank if not mentioned/invalid, no fictitious defaults)
+      // Robust Weight Validation Logic
       let parsedWeight: number | undefined = undefined;
-      if (weightRaw) {
-        const parsed = Number(weightRaw.replace(/[^0-9.]/g, ''));
-        if (!isNaN(parsed) && parsed > 0) {
-          parsedWeight = parsed;
+      const hasWeightColumn = inverseMappings['weight'] !== undefined;
+      if (hasWeightColumn) {
+        if (weightRaw !== '') {
+          // Strip any trailing unit suffixes like kg, kgs, lbs, lb (case-insensitive) and spaces
+          const cleanWeight = weightRaw.replace(/(kg|kgs|lbs|lb)\s*$/i, '').trim();
+          const parsed = Number(cleanWeight);
+          if (!isNaN(parsed) && parsed >= 0) {
+            parsedWeight = parsed;
+          } else {
+            invalidWeightCount++;
+            warningList.push(`Row ${rIdx + 1}: Invalid weight value "${weightRaw}". Left blank.`);
+            parsedWeight = undefined;
+          }
         } else {
-          warningList.push(`Row ${rIdx + 1}: Invalid weight "${weightRaw}". Left blank.`);
+          blankWeightCount++;
           parsedWeight = undefined;
         }
       } else {
-        parsedWeight = undefined; // Left blank
+        blankWeightCount++;
+        parsedWeight = undefined;
       }
 
       // Convert damaged to 'Y' | 'N'
@@ -1338,8 +1628,23 @@ export default function RushBaggageWizard() {
         finalDamaged = 'Y';
       }
 
-      // Keep locked status as raw free text string
-      let finalLocked = lockedRaw || '';
+      // Robust Locked (LN) Expansion Logic
+      let finalLocked = '';
+      const hasLockColumn = inverseMappings['ln'] !== undefined;
+      if (hasLockColumn && lockedRaw !== '') {
+        // Find case-insensitive match in lock dictionary
+        const keys = Object.keys(lockDictionary);
+        const matchedKey = keys.find(k => k.toLowerCase() === lockedRaw.toLowerCase());
+        if (matchedKey) {
+          finalLocked = lockDictionary[matchedKey];
+          recognizedLockCount++;
+        } else {
+          finalLocked = lockedRaw;
+          unrecognizedLockCount++;
+        }
+      } else {
+        finalLocked = lockedRaw; // Preserve original blank if not mentioned
+      }
 
       // Detect Protocol defaults
       let finalProtocol: 'Cleared Baggage' | 'Non-Cleared / Other' = 'Cleared Baggage';
@@ -1351,7 +1656,7 @@ export default function RushBaggageWizard() {
 
       // Validate flight numbers to default options
       const allowedFlights = ['LH760', 'LH762', 'LX146', 'LX2646'];
-      let finalFlight = 'LH760';
+      let finalFlight = '';
       if (flightVal) {
         const cleanedFlight = flightVal.toUpperCase().replace(/\s+/g, '');
         const found = allowedFlights.find(f => cleanedFlight.includes(f) || cleanedFlight === f);
@@ -1383,7 +1688,8 @@ export default function RushBaggageWizard() {
         arrivalBelt: finalProtocol === 'Non-Cleared / Other' ? 'Arrival Belt 9' : undefined,
         handoverOption: finalProtocol === 'Non-Cleared / Other' ? 'Partner Airlines' : undefined,
         warehouseOption: finalProtocol === 'Non-Cleared / Other' ? 'CWC Warehouse' : undefined,
-        reexportOption: finalProtocol === 'Non-Cleared / Other' ? 'Re-export to Carrier Hub' : undefined
+        reexportOption: finalProtocol === 'Non-Cleared / Other' ? 'Re-export to Carrier Hub' : undefined,
+        registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry
       };
 
       // Check Duplicates against existing local baggage records
@@ -1435,6 +1741,10 @@ export default function RushBaggageWizard() {
       skipped: skippedCount,
       duplicates: duplicateCount,
       invalid: invalidCount,
+      blankWeights: blankWeightCount,
+      invalidWeights: invalidWeightCount,
+      recognizedLocks: recognizedLockCount,
+      unrecognizedLocks: unrecognizedLockCount,
       warnings: warningList
     });
 
@@ -1512,6 +1822,9 @@ export default function RushBaggageWizard() {
       // 2. Flight select matches
       const matchesFlight = flightFilter === 'ALL' || item.flightNo === flightFilter;
 
+      // Filter by registry type
+      const matchesRegistry = activeRegistry === 'Combined' || item.registryType === activeRegistry;
+
       // 3. Bento Dashboard buttons filter
       let matchesDashboard = true;
       if (activeFilter.type === 'expected') {
@@ -1530,9 +1843,9 @@ export default function RushBaggageWizard() {
         matchesDashboard = item.status === 'Received' && getDaysInStorage(item) >= 3;
       }
 
-      return matchesSearch && matchesFlight && matchesDashboard;
+      return matchesSearch && matchesFlight && matchesRegistry && matchesDashboard;
     });
-  }, [baggageList, searchTerm, flightFilter, activeFilter]);
+  }, [baggageList, searchTerm, flightFilter, activeRegistry, activeFilter, getDaysInStorage]);
 
   // Alert list computed property
   const activeAlerts = useMemo(() => {
@@ -1967,8 +2280,28 @@ export default function RushBaggageWizard() {
         {/* 4. Live Dashboard Bento Grid */}
         {activeSection === 'dashboard' && (
           <section id="dashboard" className="space-y-4">
-            <div className="flex justify-between items-center">
+             <div className="flex justify-between items-center">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Live Operational Dashboard</h2>
+              <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1">
+                <button
+                  onClick={() => setActiveRegistry('Arrival')}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition ${activeRegistry === 'Arrival' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Arrival
+                </button>
+                <button
+                  onClick={() => setActiveRegistry('Departure')}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition ${activeRegistry === 'Departure' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Departure
+                </button>
+                <button
+                  onClick={() => setActiveRegistry('Combined')}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition ${activeRegistry === 'Combined' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Combined
+                </button>
+              </div>
               {activeFilter.type !== 'all' && (
                 <button
                   onClick={handleClearFilters}
@@ -2159,503 +2492,877 @@ export default function RushBaggageWizard() {
               </button>
             </div>
 
-            {/* Additional Manual Bag Entry form overlay if active */}
             {showAddForm && (
               <div className="bg-slate-900 border border-indigo-500/30 rounded-xl p-5 shadow-xl space-y-4 animate-in fade-in zoom-in duration-200">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                  <h3 className="font-bold text-slate-200 text-sm">Register Additional Left-Behind Bag</h3>
+                  <div className="flex flex-col">
+                    <h3 className="font-bold text-slate-200 text-sm">Add Additional Baggage Module</h3>
+                    <span className="text-[10px] text-slate-400">Gate Scanner &amp; Reconciliation Operations</span>
+                  </div>
                   <button onClick={() => setShowAddForm(false)} className="cursor-pointer">
                     <X className="w-4 h-4 text-slate-400 hover:text-slate-200" />
                   </button>
                 </div>
 
-                <form onSubmit={handleAddBagSubmit} className="space-y-4">
-                  {/* Primary operational information (First 5 fields) */}
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-slate-950/40 p-4 rounded-lg border border-slate-800/60">
-                    {/* 1. Flight No */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Flight No *</label>
-                      <select
-                        required
-                        value={newBag.flightNo}
-                        onChange={(e) => setNewBag({...newBag, flightNo: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer"
-                      >
-                        <option value="LH760">LH760</option>
-                        <option value="LH762">LH762</option>
-                        <option value="LX146">LX146</option>
-                        <option value="LX2646">LX2646</option>
-                        <option value="LHG Other">LHG Other</option>
-                      </select>
-                    </div>
+                {/* Mode Selector Tab */}
+                <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkMode(false)}
+                    className={`flex-1 py-1.5 text-xs rounded-md font-semibold transition cursor-pointer ${!isBulkMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Single Bag Registration
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkMode(true)}
+                    className={`flex-1 py-1.5 text-xs rounded-md font-semibold transition cursor-pointer ${isBulkMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Bulk Baggage Operations
+                  </button>
+                </div>
 
-                    {/* 2. Original Tag */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Original Tag</label>
-                      <input
-                        type="text"
-                        placeholder="10-digit number"
-                        value={newBag.originalTag}
-                        onChange={(e) => setNewBag({...newBag, originalTag: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
-                      />
-                    </div>
-
-                    {/* 3. Rush Tag */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Rush Tag</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. LX920394"
-                        value={newBag.rushTag}
-                        onChange={(e) => setNewBag({...newBag, rushTag: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
-                      />
-                    </div>
-
-                    {/* 4. Name */}
-                    <div className="md:col-span-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Passenger Full Name *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="LASTNAME FIRSTNAME"
-                        value={newBag.name}
-                        onChange={(e) => setNewBag({...newBag, name: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
-                      />
-                    </div>
-
-                    {/* 5. PIR */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">PIR Number *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="e.g. BOM_LX_11029"
-                        value={newBag.pir}
-                        onChange={(e) => setNewBag({...newBag, pir: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Rest of the fields */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {/* Locked (LN) free text input */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Locked (L/N)</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. PAD, CL, Y, N"
-                        value={newBag.ln || ''}
-                        onChange={(e) => setNewBag({...newBag, ln: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
-                      />
-                    </div>
-
-                    {/* Weight Field (kg) */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Weight (kg)</label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          placeholder="e.g. 23.4 (Optional)"
-                          value={newBag.weight === undefined ? '' : newBag.weight}
-                          onChange={(e) => setNewBag({...newBag, weight: e.target.value === '' ? undefined : Number(e.target.value)})}
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 pl-3 pr-8 py-1.5 rounded text-xs"
-                        />
-                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-bold">kg</span>
-                      </div>
-                    </div>
-
-                    {/* Damaged Selector (Y/N) */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Damaged *</label>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setNewBag({...newBag, damaged: 'Y'})}
-                          className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition ${
-                            newBag.damaged === 'Y'
-                              ? 'bg-amber-600 border-amber-500 text-white'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                          }`}
+                {!isBulkMode ? (
+                  /* SINGLE BAG REGISTRATION MODE */
+                  <form onSubmit={handleAddBagSubmit} className="space-y-4">
+                    {/* Primary operational information (First 5 fields) */}
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-slate-950/40 p-4 rounded-lg border border-slate-800/60">
+                      {/* 1. Flight No */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Flight No *</label>
+                        <select
+                          required
+                          value={newBag.flightNo}
+                          onChange={(e) => setNewBag({...newBag, flightNo: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer font-semibold"
                         >
-                          Y
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setNewBag({...newBag, damaged: 'N'})}
-                          className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition ${
-                            newBag.damaged === 'N' || !newBag.damaged
-                              ? 'bg-indigo-600 border-indigo-500 text-white'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                          }`}
-                        >
-                          N
-                        </button>
+                          <option value="LH760">LH760</option>
+                          <option value="LH762">LH762</option>
+                          <option value="LX146">LX146</option>
+                          <option value="LX2646">LX2646</option>
+                          <option value="LHG Other">LHG Other</option>
+                          <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                        </select>
                       </div>
-                    </div>
 
-                    {/* Bag Status */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Bag Status *</label>
-                      <select
-                        value={newBag.status}
-                        onChange={(e) => setNewBag({...newBag, status: e.target.value as any})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs font-semibold text-indigo-400 cursor-pointer"
-                      >
-                        <option value="Expected">Expected (Not Arrived)</option>
-                        <option value="Received">Arrived (Received)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Destination */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Destination</label>
-                      <input
-                        type="text"
-                        value={newBag.destination}
-                        onChange={(e) => setNewBag({...newBag, destination: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
-                      />
-                    </div>
-
-                    {/* Seal */}
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Seal</label>
-                      <input
-                        type="text"
-                        placeholder="S-xxxxx"
-                        value={newBag.seal}
-                        onChange={(e) => setNewBag({...newBag, seal: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {newBag.status === 'Received' && (
-                    <div className="bg-slate-950 p-3 rounded border border-slate-800 space-y-3">
-                      <p className="text-[10px] uppercase font-bold text-indigo-400">Arrived Baggage Quick setup</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[9px] uppercase text-slate-400">Customs Status</label>
-                          <select
-                            value={newBag.customsStatus}
-                            onChange={(e) => setNewBag({...newBag, customsStatus: e.target.value as any})}
-                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 text-xs py-1 rounded cursor-pointer"
+                      {/* 2. Original Tag */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Original Tag</label>
+                        <div className="flex">
+                          <input
+                            type="text"
+                            placeholder="10-digit number"
+                            value={newBag.originalTag}
+                            onChange={(e) => setNewBag({...newBag, originalTag: e.target.value})}
+                            className="flex-1 min-w-0 bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded-l text-xs font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setScannerTargetField('originalTag');
+                              setIsScannerOpen(true);
+                            }}
+                            className="px-2.5 bg-slate-800 hover:bg-slate-700 border border-l-0 border-slate-800 text-indigo-400 rounded-r flex items-center justify-center cursor-pointer transition"
+                            title="Scan Original Tag"
                           >
-                            <option value="Pending">Pending</option>
-                            <option value="Cleared">Cleared</option>
-                            <option value="Not Cleared">Not Cleared</option>
-                            <option value="Marked Preventive">Marked Preventive (Severe Hold)</option>
-                          </select>
+                            <Camera className="w-4 h-4" />
+                          </button>
                         </div>
-                        {(newBag.customsStatus === 'Not Cleared' || newBag.customsStatus === 'Marked Preventive') && (
+                      </div>
+
+                      {/* 3. Rush Tag */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Rush Tag</label>
+                        <div className="flex">
+                          <input
+                            type="text"
+                            placeholder="e.g. LX920394"
+                            value={newBag.rushTag}
+                            onChange={(e) => setNewBag({...newBag, rushTag: e.target.value})}
+                            className="flex-1 min-w-0 bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded-l text-xs font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setScannerTargetField('rushTag');
+                              setIsScannerOpen(true);
+                            }}
+                            className="px-2.5 bg-slate-800 hover:bg-slate-700 border border-l-0 border-slate-800 text-indigo-400 rounded-r flex items-center justify-center cursor-pointer transition"
+                            title="Scan Rush Tag"
+                          >
+                            <Camera className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 4. Name */}
+                      <div className="md:col-span-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Passenger Full Name</label>
+                        <input
+                          type="text"
+                          placeholder="LASTNAME FIRSTNAME"
+                          value={newBag.name}
+                          onChange={(e) => setNewBag({...newBag, name: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                        />
+                      </div>
+
+                      {/* 5. PIR */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">PIR Number</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. BOM_LX_11029"
+                          value={newBag.pir}
+                          onChange={(e) => setNewBag({...newBag, pir: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Rest of the fields */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {/* Locked (LN) free text input */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Locked (L/N)</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. PAD, CL, Y, N"
+                          value={newBag.ln || ''}
+                          onChange={(e) => setNewBag({...newBag, ln: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
+                        />
+                      </div>
+
+                      {/* Weight Field (kg) */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Weight (kg)</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="e.g. 23.4 (Optional)"
+                            value={newBag.weight === undefined ? '' : newBag.weight}
+                            onChange={(e) => setNewBag({...newBag, weight: e.target.value === '' ? undefined : Number(e.target.value)})}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 pl-3 pr-8 py-1.5 rounded text-xs"
+                          />
+                          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-bold">kg</span>
+                        </div>
+                      </div>
+
+                      {/* Damaged Selector (Y/N) */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Damaged *</label>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNewBag({...newBag, damaged: 'Y'})}
+                            className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition cursor-pointer ${
+                              newBag.damaged === 'Y'
+                                ? 'bg-amber-600 border-amber-500 text-white shadow'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            Y
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewBag({...newBag, damaged: 'N'})}
+                            className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition cursor-pointer ${
+                              newBag.damaged === 'N' || !newBag.damaged
+                                ? 'bg-indigo-600 border-indigo-500 text-white shadow'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            N
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bag Status */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Bag Status *</label>
+                        <select
+                          value={newBag.status}
+                          onChange={(e) => setNewBag({...newBag, status: e.target.value as any})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs font-semibold text-indigo-400 cursor-pointer"
+                        >
+                          <option value="Expected">Expected (Not Arrived)</option>
+                          <option value="Received">Arrived (Received)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Destination */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Destination</label>
+                        <input
+                          type="text"
+                          value={newBag.destination}
+                          onChange={(e) => setNewBag({...newBag, destination: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                        />
+                      </div>
+
+                      {/* Seal */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Seal</label>
+                        <input
+                          type="text"
+                          placeholder="S-xxxxx"
+                          value={newBag.seal}
+                          onChange={(e) => setNewBag({...newBag, seal: e.target.value})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {newBag.status === 'Received' && (
+                      <div className="bg-slate-950 p-3 rounded border border-slate-800 space-y-3">
+                        <p className="text-[10px] uppercase font-bold text-indigo-400">Arrived Baggage Quick setup</p>
+                        <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className="text-[9px] uppercase text-slate-400">Hold Reason</label>
+                            <label className="text-[9px] uppercase text-slate-400">Customs Status</label>
                             <select
-                              value={newBag.customsReason}
-                              onChange={(e) => setNewBag({...newBag, customsReason: e.target.value as any})}
-                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 text-xs py-1 rounded cursor-pointer"
+                              value={newBag.customsStatus}
+                              onChange={(e) => setNewBag({...newBag, customsStatus: e.target.value as any})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 text-xs py-1 rounded cursor-pointer font-semibold"
                             >
-                              <option value="Lack of documents">Lack of documents</option>
-                              <option value="Awaiting documents">Awaiting documents</option>
-                              <option value="Refused">Refused</option>
-                              <option value="Deferred">Deferred</option>
-                              <option value="Preventive">Preventive</option>
+                              <option value="Pending">Pending</option>
+                              <option value="Cleared">Cleared</option>
+                              <option value="Not Cleared">Not Cleared</option>
+                              <option value="Marked Preventive">Marked Preventive (Severe Hold)</option>
                             </select>
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Dispositions & Customs Operations Protocol Workflow Selector */}
-                  <div className="space-y-1 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
-                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Dispositions & Customs Operations Protocol *</label>
-                    <select
-                      required
-                      value={newBag.protocol}
-                      onChange={(e) => {
-                        const nextProtocol = e.target.value as any;
-                        setNewBagClearedAction('');
-                        setNewBagNonClearedAction('');
-                        setNewBag({
-                          ...newBag,
-                          protocol: nextProtocol,
-                          deliveryAgent: undefined,
-                          storageOption: undefined,
-                          domesticForwarding: undefined,
-                          arrivalBelt: undefined,
-                          handoverOption: undefined,
-                          warehouseOption: undefined,
-                          reexportOption: undefined
-                        });
-                      }}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
-                    >
-                      <option value="">-- Choose Protocol to determine remainder of workflow --</option>
-                      <option value="Cleared Baggage">Cleared Baggage</option>
-                      <option value="Non-Cleared / Other">Non-Cleared / Other</option>
-                    </select>
-                  </div>
-
-                  {/* Dynamic Fields with smooth Framer Motion expand/collapse animation */}
-                  <AnimatePresence initial={false}>
-                    {newBag.protocol && (
-                      <motion.div
-                        key={newBag.protocol}
-                        initial={{ opacity: 0, height: 0, scale: 0.98 }}
-                        animate={{ opacity: 1, height: 'auto', scale: 1 }}
-                        exit={{ opacity: 0, height: 0, scale: 0.98 }}
-                        transition={{ duration: 0.3, ease: 'easeInOut' }}
-                        className="bg-slate-950/80 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
-                      >
-                        <div className="border-b border-slate-800/80 pb-2 flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
-                            {newBag.protocol} Workflow Protocol
-                          </span>
-                          <span className="text-[9px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">Rule-based options</span>
-                        </div>
-
-                        {newBag.protocol === 'Cleared Baggage' ? (
-                          <div className="space-y-4">
-                            {/* Level 2: Master dropdown for Cleared Baggage Action */}
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
+                          {(newBag.customsStatus === 'Not Cleared' || newBag.customsStatus === 'Marked Preventive') && (
+                            <div>
+                              <label className="text-[9px] uppercase text-slate-400">Hold Reason</label>
                               <select
-                                required
-                                value={newBagClearedAction}
-                                onChange={(e) => {
-                                  const act = e.target.value;
-                                  setNewBagClearedAction(act);
-                                  setNewBag(prev => ({
-                                    ...prev,
-                                    deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
-                                    storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
-                                    domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
-                                  }));
-                                }}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                value={newBag.customsReason}
+                                onChange={(e) => setNewBag({...newBag, customsReason: e.target.value as any})}
+                                className="w-full bg-slate-900 border border-slate-800 text-slate-200 text-xs py-1 rounded cursor-pointer font-semibold"
                               >
-                                <option value="">-- Select Cleared Baggage Action --</option>
-                                <option value="deliveryAgent">Delivery Agent</option>
-                                <option value="storage">Storage</option>
-                                <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                                <option value="Lack of documents">Lack of documents</option>
+                                <option value="Awaiting documents">Awaiting documents</option>
+                                <option value="Refused">Refused</option>
+                                <option value="Deferred">Deferred</option>
+                                <option value="Preventive">Preventive</option>
                               </select>
                             </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
-                            <AnimatePresence initial={false}>
-                              {newBagClearedAction === 'deliveryAgent' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
+                    {/* Dispositions & Customs Operations Protocol Workflow Selector */}
+                    <div className="space-y-1 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
+                      <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Dispositions &amp; Customs Operations Protocol *</label>
+                      <select
+                        value={newBag.protocol}
+                        onChange={(e) => {
+                          const nextProtocol = e.target.value as any;
+                          setNewBagClearedAction('');
+                          setNewBagNonClearedAction('');
+                          setNewBag({
+                            ...newBag,
+                            protocol: nextProtocol,
+                            deliveryAgent: undefined,
+                            storageOption: undefined,
+                            domesticForwarding: undefined,
+                            arrivalBelt: undefined,
+                            handoverOption: undefined,
+                            warehouseOption: undefined,
+                            reexportOption: undefined
+                          });
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                      >
+                        <option value="">-- Choose Protocol to determine remainder of workflow --</option>
+                        <option value="Cleared Baggage">Cleared Baggage</option>
+                        <option value="Non-Cleared / Other">Non-Cleared / Other</option>
+                      </select>
+                    </div>
+
+                    {/* Dynamic Fields with smooth Framer Motion expand/collapse animation */}
+                    <AnimatePresence initial={false}>
+                      {newBag.protocol && (
+                        <motion.div
+                          key={newBag.protocol}
+                          initial={{ opacity: 0, height: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, height: 'auto', scale: 1 }}
+                          exit={{ opacity: 0, height: 0, scale: 0.98 }}
+                          transition={{ duration: 0.3, ease: 'easeInOut' }}
+                          className="bg-slate-950/80 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
+                        >
+                          <div className="border-b border-slate-800/80 pb-2 flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
+                              {newBag.protocol} Workflow Protocol
+                            </span>
+                            <span className="text-[9px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">Rule-based options</span>
+                          </div>
+
+                          {newBag.protocol === 'Cleared Baggage' ? (
+                            <div className="space-y-4">
+                              {/* Level 2: Master dropdown for Cleared Baggage Action */}
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
+                                <select
+                                  value={newBagClearedAction}
+                                  onChange={(e) => {
+                                    const act = e.target.value;
+                                    setNewBagClearedAction(act);
+                                    setNewBag(prev => ({
+                                      ...prev,
+                                      deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
+                                      storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
+                                      domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
                                 >
+                                  <option value="">-- Select Cleared Baggage Action --</option>
+                                  <option value="deliveryAgent">Delivery Agent</option>
+                                  <option value="storage">Storage</option>
+                                  <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                                </select>
+                              </div>
+
+                              <AnimatePresence initial={false}>
+                                {newBagClearedAction === 'deliveryAgent' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
+                                    <select
+                                      value={newBag.deliveryAgent || 'VVM'}
+                                      onChange={(e) => setNewBag({...newBag, deliveryAgent: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="VVM">VVM</option>
+                                      <option value="Outlook">Outlook</option>
+                                      <option value="Advik">Advik</option>
+                                    </select>
+                                  </motion.div>
+                                )}
+
+                                {newBagClearedAction === 'storage' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
+                                    <select
+                                      value={newBag.storageOption || 'Standard Warehousing – LHG Office'}
+                                      onChange={(e) => setNewBag({...newBag, storageOption: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
+                                    </select>
+                                  </motion.div>
+                                )}
+
+                                {newBagClearedAction === 'domesticForwarding' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                    <select
+                                      value={newBag.domesticForwarding || 'Air India'}
+                                      onChange={(e) => setNewBag({...newBag, domesticForwarding: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Air India">Air India</option>
+                                      <option value="IndiGo">IndiGo</option>
+                                      <option value="SpiceJet">SpiceJet</option>
+                                    </select>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
+                                <select
+                                  value={newBagNonClearedAction}
+                                  onChange={(e) => {
+                                    const act = e.target.value;
+                                    setNewBagNonClearedAction(act);
+                                    setNewBag(prev => ({
+                                      ...prev,
+                                      arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
+                                      handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
+                                      warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
+                                      reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                >
+                                  <option value="">-- Select Non-Cleared / Other Action --</option>
+                                  <option value="arrivalBelt">Arrival Belt</option>
+                                  <option value="handover">Handover</option>
+                                  <option value="warehouse">Warehouse</option>
+                                  <option value="reexport">Re-export</option>
+                                </select>
+                              </div>
+
+                              <AnimatePresence initial={false}>
+                                {newBagNonClearedAction === 'arrivalBelt' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
+                                    <select
+                                      value={newBag.arrivalBelt || 'Arrival Belt 9'}
+                                      onChange={(e) => setNewBag({...newBag, arrivalBelt: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Arrival Belt 9">Belt 9 (Default)</option>
+                                    </select>
+                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Default holding area with queue check.</p>
+                                  </motion.div>
+                                )}
+
+                                {newBagNonClearedAction === 'handover' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
+                                    <select
+                                      value={newBag.handoverOption || 'Partner Airlines'}
+                                      onChange={(e) => setNewBag({...newBag, handoverOption: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Partner Airlines">Partner Airlines</option>
+                                    </select>
+                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Transfer custody to the designated partner airline.</p>
+                                  </motion.div>
+                                )}
+
+                                {newBagNonClearedAction === 'warehouse' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
+                                    <select
+                                      value={newBag.warehouseOption || 'CWC Warehouse'}
+                                      onChange={(e) => setNewBag({...newBag, warehouseOption: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="CWC Warehouse">CWC Warehouse</option>
+                                    </select>
+                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Secure central depot storage.</p>
+                                  </motion.div>
+                                )}
+
+                                {newBagNonClearedAction === 'reexport' && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="space-y-1 overflow-hidden"
+                                  >
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
+                                    <select
+                                      value={newBag.reexportOption || 'Re-export to Carrier Hub'}
+                                      onChange={(e) => setNewBag({...newBag, reexportOption: e.target.value as any})}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
+                                    </select>
+                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Repatriate the baggage to the originating carrier&apos;s hub.</p>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Remarks */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase">Remarks</label>
+                      <textarea
+                        rows={2}
+                        placeholder="Add handling details..."
+                        value={newBag.remarks}
+                        onChange={(e) => setNewBag({...newBag, remarks: e.target.value})}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-2.5 rounded-lg text-xs cursor-pointer shadow-lg shadow-indigo-600/10 transition"
+                    >
+                      Register and Save Bag
+                    </button>
+                  </form>
+                ) : (
+                  /* BULK BAGGAGE OPERATIONS MODE */
+                  <form onSubmit={handleProcessBulkAdd} className="space-y-4">
+                    {/* Bulk Dispositions & Customs Operations Protocol (TOP OF CONTAINER) */}
+                    <div className="bg-indigo-950/25 p-4 rounded-lg border border-indigo-500/20 space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">
+                          Dispositions &amp; Customs Operations Protocol *
+                        </label>
+                        <select
+                          required
+                          value={bulkProtocol}
+                          onChange={(e) => {
+                            const nextProtocol = e.target.value as any;
+                            setBulkClearedAction('');
+                            setBulkNonClearedAction('');
+                            setBulkProtocol(nextProtocol);
+                          }}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-indigo-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                        >
+                          <option value="">-- Choose Protocol to determine remainder of workflow --</option>
+                          <option value="Cleared Baggage">Cleared Baggage (Cleared for Delivery/Storage/Forwarding)</option>
+                          <option value="Non-Cleared / Other">Non-Cleared / Other (Arrival Belts/Handovers/CWC/Re-export)</option>
+                        </select>
+                      </div>
+
+                      {bulkProtocol && (
+                        <div className="bg-slate-950/80 p-3 rounded border border-slate-800 space-y-3">
+                          {bulkProtocol === 'Cleared Baggage' ? (
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
+                                <select
+                                  required
+                                  value={bulkClearedAction}
+                                  onChange={(e) => setBulkClearedAction(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                >
+                                  <option value="">-- Select Cleared Baggage Action --</option>
+                                  <option value="deliveryAgent">Delivery Agent</option>
+                                  <option value="storage">Storage</option>
+                                  <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                                </select>
+                              </div>
+
+                              {bulkClearedAction === 'deliveryAgent' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
                                   <select
                                     required
-                                    value={newBag.deliveryAgent || 'VVM'}
-                                    onChange={(e) => setNewBag({...newBag, deliveryAgent: e.target.value as any})}
+                                    value={bulkDeliveryAgent}
+                                    onChange={(e) => setBulkDeliveryAgent(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="VVM">VVM</option>
                                     <option value="Outlook">Outlook</option>
                                     <option value="Advik">Advik</option>
                                   </select>
-                                </motion.div>
+                                </div>
                               )}
 
-                              {newBagClearedAction === 'storage' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
+                              {bulkClearedAction === 'storage' && (
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Storage Location *</label>
                                   <select
                                     required
-                                    value={newBag.storageOption || 'Standard Warehousing – LHG Office'}
-                                    onChange={(e) => setNewBag({...newBag, storageOption: e.target.value as any})}
+                                    value={bulkStorageOption}
+                                    onChange={(e) => setBulkStorageOption(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
                                   </select>
-                                </motion.div>
+                                </div>
                               )}
 
-                              {newBagClearedAction === 'domesticForwarding' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
+                              {bulkClearedAction === 'domesticForwarding' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
                                   <select
                                     required
-                                    value={newBag.domesticForwarding || 'Air India'}
-                                    onChange={(e) => setNewBag({...newBag, domesticForwarding: e.target.value as any})}
+                                    value={bulkDomesticForwarding}
+                                    onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="Air India">Air India</option>
                                     <option value="IndiGo">IndiGo</option>
                                     <option value="SpiceJet">SpiceJet</option>
                                   </select>
-                                </motion.div>
+                                </div>
                               )}
-                            </AnimatePresence>
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
-                              <select
-                                required
-                                value={newBagNonClearedAction}
-                                onChange={(e) => {
-                                  const act = e.target.value;
-                                  setNewBagNonClearedAction(act);
-                                  setNewBag(prev => ({
-                                    ...prev,
-                                    arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
-                                    handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
-                                    warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
-                                    reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
-                                  }));
-                                }}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                              >
-                                <option value="">-- Select Non-Cleared / Other Action --</option>
-                                <option value="arrivalBelt">Arrival Belt</option>
-                                <option value="handover">Handover</option>
-                                <option value="warehouse">Warehouse</option>
-                                <option value="reexport">Re-export</option>
-                              </select>
                             </div>
-
-                            <AnimatePresence initial={false}>
-                              {newBagNonClearedAction === 'arrivalBelt' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
+                          ) : (
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
+                                <select
+                                  required
+                                  value={bulkNonClearedAction}
+                                  onChange={(e) => setBulkNonClearedAction(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
                                 >
+                                  <option value="">-- Select Non-Cleared / Other Action --</option>
+                                  <option value="arrivalBelt">Arrival Belt</option>
+                                  <option value="handover">Handover</option>
+                                  <option value="warehouse">Warehouse</option>
+                                  <option value="reexport">Re-export</option>
+                                </select>
+                              </div>
+
+                              {bulkNonClearedAction === 'arrivalBelt' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
                                   <select
                                     required
-                                    value={newBag.arrivalBelt || 'Arrival Belt 9'}
-                                    onChange={(e) => setNewBag({...newBag, arrivalBelt: e.target.value as any})}
+                                    value={bulkArrivalBelt}
+                                    onChange={(e) => setBulkArrivalBelt(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="Arrival Belt 9">Belt 9 (Default)</option>
                                   </select>
-                                  <p className="text-[9px] text-slate-500 italic mt-0.5">Default holding area with queue check.</p>
-                                </motion.div>
+                                </div>
                               )}
 
-                              {newBagNonClearedAction === 'handover' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
+                              {bulkNonClearedAction === 'handover' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
                                   <select
                                     required
-                                    value={newBag.handoverOption || 'Partner Airlines'}
-                                    onChange={(e) => setNewBag({...newBag, handoverOption: e.target.value as any})}
+                                    value={bulkHandoverOption}
+                                    onChange={(e) => setBulkHandoverOption(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="Partner Airlines">Partner Airlines</option>
                                   </select>
-                                  <p className="text-[9px] text-slate-500 italic mt-0.5">Transfer custody to the designated partner airline.</p>
-                                </motion.div>
+                                </div>
                               )}
 
-                              {newBagNonClearedAction === 'warehouse' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
+                              {bulkNonClearedAction === 'warehouse' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
                                   <select
                                     required
-                                    value={newBag.warehouseOption || 'CWC Warehouse'}
-                                    onChange={(e) => setNewBag({...newBag, warehouseOption: e.target.value as any})}
+                                    value={bulkWarehouseOption}
+                                    onChange={(e) => setBulkWarehouseOption(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="CWC Warehouse">CWC Warehouse</option>
                                   </select>
-                                  <p className="text-[9px] text-slate-500 italic mt-0.5">Secure central depot storage.</p>
-                                </motion.div>
+                                </div>
                               )}
 
-                              {newBagNonClearedAction === 'reexport' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
+                              {bulkNonClearedAction === 'reexport' && (
+                                <div className="space-y-1">
                                   <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
                                   <select
                                     required
-                                    value={newBag.reexportOption || 'Re-export to Carrier Hub'}
-                                    onChange={(e) => setNewBag({...newBag, reexportOption: e.target.value as any})}
+                                    value={bulkReexportOption}
+                                    onChange={(e) => setBulkReexportOption(e.target.value as any)}
                                     className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                   >
                                     <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
                                   </select>
-                                  <p className="text-[9px] text-slate-500 italic mt-0.5">Repatriate the baggage to the originating carrier&apos;s hub.</p>
-                                </motion.div>
+                                </div>
                               )}
-                            </AnimatePresence>
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
 
-                  {/* Remarks */}
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase">Remarks</label>
-                    <textarea
-                      rows={2}
-                      placeholder="Add handling details..."
-                      value={newBag.remarks}
-                      onChange={(e) => setNewBag({...newBag, remarks: e.target.value})}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
-                    />
-                  </div>
+                    {/* Common Baggage Metadata Optional Fields Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-950/40 p-4 rounded-lg border border-slate-800/60">
+                      {/* Flight No */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Flight No</label>
+                        <select
+                          value={bulkFlightNo}
+                          onChange={(e) => setBulkFlightNo(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer font-semibold"
+                        >
+                          <option value="LH760">LH760</option>
+                          <option value="LH762">LH762</option>
+                          <option value="LX146">LX146</option>
+                          <option value="LX2646">LX2646</option>
+                          <option value="LHG Other">LHG Other</option>
+                          <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                        </select>
+                      </div>
 
-                  <button
-                    type="submit"
-                    className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-2.5 rounded-lg text-xs cursor-pointer shadow-lg shadow-indigo-600/10 transition"
-                  >
-                    Register and Save Bag
-                  </button>
-                </form>
+                      {/* Destination */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Destination</label>
+                        <input
+                          type="text"
+                          value={bulkDestination}
+                          onChange={(e) => setBulkDestination(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-3 py-1.5 rounded text-xs font-semibold"
+                        />
+                      </div>
+
+                      {/* Status */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Status</label>
+                        <select
+                          value={bulkStatus}
+                          onChange={(e) => setBulkStatus(e.target.value as any)}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer font-semibold text-indigo-400"
+                        >
+                          <option value="Expected">Expected (Not Arrived)</option>
+                          <option value="Received">Arrived (Received)</option>
+                        </select>
+                      </div>
+
+                      {/* Damaged */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Damaged</label>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setBulkDamaged('Y')}
+                            className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition cursor-pointer ${
+                              bulkDamaged === 'Y'
+                                ? 'bg-amber-600 border-amber-500 text-white shadow'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            Y
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkDamaged('N')}
+                            className={`flex-1 py-1 px-3 text-xs rounded font-semibold border transition cursor-pointer ${
+                              bulkDamaged === 'N'
+                                ? 'bg-indigo-600 border-indigo-500 text-white shadow'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            N
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Locked (LN) */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Locked (L/N)</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. PAD, CL, Y, N"
+                          value={bulkLn}
+                          onChange={(e) => setBulkLn(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
+                        />
+                      </div>
+
+                      {/* Weight */}
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Weight (kg)</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="e.g. 23.4"
+                            value={bulkWeight === undefined ? '' : bulkWeight}
+                            onChange={(e) => setBulkWeight(e.target.value === '' ? undefined : Number(e.target.value))}
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 pl-3 pr-8 py-1.5 rounded text-xs"
+                          />
+                          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-bold">kg</span>
+                        </div>
+                      </div>
+
+                      {/* Seal */}
+                      <div className="col-span-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Seal</label>
+                        <input
+                          type="text"
+                          placeholder="S-xxxxx"
+                          value={bulkSeal}
+                          onChange={(e) => setBulkSeal(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* BULK LIST INPUT AND SCANNER TRIGGERS */}
+                    <div className="space-y-2 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-300 uppercase block">
+                            Baggage Tags List *
+                          </label>
+                          <span className="text-[9px] text-slate-500">
+                            Enter tags separated by commas, spaces, or lines.
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField('bulk');
+                            setContinuousScannedTags([]);
+                            setIsScannerOpen(true);
+                          }}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow shadow-indigo-600/10"
+                        >
+                          <QrCode className="w-4 h-4 animate-bounce" />
+                          <span>Continuous Camera Scanning (Bulk)</span>
+                        </button>
+                      </div>
+
+                      <textarea
+                        rows={5}
+                        placeholder="e.g. 0220123456, LH123457 0724123458&#10;LX987654"
+                        value={bulkTagsInput}
+                        onChange={(e) => setBulkTagsInput(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-mono tracking-widest placeholder-slate-700"
+                        required
+                      />
+
+                      {/* Parser Stats Preview */}
+                      {bulkTagsInput.trim() && (
+                        <div className="flex justify-between items-center bg-slate-950 px-3 py-1.5 rounded border border-slate-800 text-[10px] text-slate-400 font-mono">
+                          <span>Total Tags Parsed:</span>
+                          <span className="font-bold text-indigo-400">{parseBulkInput(bulkTagsInput).length} Bags</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-3 rounded-lg text-xs cursor-pointer shadow-lg shadow-indigo-600/10 transition flex items-center justify-center gap-2"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Register and Save Bulk Operations ({parseBulkInput(bulkTagsInput).length} Records)</span>
+                    </button>
+                  </form>
+                )}
               </div>
             )}
           </section>
@@ -3187,7 +3894,10 @@ export default function RushBaggageWizard() {
               </div>
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => setShowDictionaryEditor(!showDictionaryEditor)}
+                  onClick={() => {
+                    setShowDictionaryEditor(!showDictionaryEditor);
+                    setShowLockDictionaryEditor(false);
+                  }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                     showDictionaryEditor 
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
@@ -3195,8 +3905,23 @@ export default function RushBaggageWizard() {
                   }`}
                   title="Configure fuzzy synonyms & aliases"
                 >
-                  <Settings className="w-3.5 h-3.5" />
+                  <Settings className="w-3.5 h-3.5 text-amber-400" />
                   Mapping Dictionary
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowLockDictionaryEditor(!showLockDictionaryEditor);
+                    setShowDictionaryEditor(false);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    showLockDictionaryEditor 
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' 
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                  }`}
+                  title="Configure Lock Abbreviation Dictionary"
+                >
+                  <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                  Lock Dictionary
                 </button>
                 <button 
                   onClick={() => {
@@ -3374,6 +4099,87 @@ export default function RushBaggageWizard() {
                     className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-1 rounded text-xs transition"
                   >
                     Add Alias
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Lock Dictionary Editor Panel (Slide down overlay) */}
+            {showLockDictionaryEditor && (
+              <div className="bg-slate-950 border-b border-slate-800 p-5 space-y-4 max-h-[350px] overflow-y-auto animate-in slide-in-from-top duration-200">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5 font-sans">
+                      <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                      Configure Configurable Lock Mapping Dictionary
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Define custom lock abbreviations and how they automatically expand on import (e.g., CL to Combination Lock).</p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      if (confirm('Reset custom lock dictionary to factory defaults?')) {
+                        saveLockDictionary(DEFAULT_LOCK_DICTIONARY);
+                      }
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset to Defaults
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {Object.entries(lockDictionary).map(([abbr, expanded]) => (
+                    <div key={abbr} className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex justify-between items-center">
+                      <div>
+                        <span className="text-xs font-bold text-indigo-300 font-mono bg-indigo-950/30 px-1.5 py-0.5 rounded border border-indigo-900/30">{abbr}</span>
+                        <span className="text-[10px] text-slate-300 block mt-2 font-medium">{expanded}</span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          const updated = { ...lockDictionary };
+                          delete updated[abbr];
+                          saveLockDictionary(updated);
+                        }}
+                        className="text-slate-500 hover:text-red-400 font-bold p-1 bg-slate-950 rounded border border-slate-800 hover:border-red-900/40 text-xs w-6 h-6 flex items-center justify-center transition"
+                        title="Remove Mapping"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add Lock Mapping Form */}
+                <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800/80 flex flex-wrap gap-2 items-center">
+                  <span className="text-xs text-slate-400 font-semibold">Add Lock Mapping:</span>
+                  <input 
+                    type="text" 
+                    placeholder="Abbreviation (e.g. CL)"
+                    value={newLockAbbr}
+                    onChange={(e) => setNewLockAbbr(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 w-44 font-mono uppercase focus:border-indigo-500 focus:outline-none"
+                  />
+                  <input 
+                    type="text" 
+                    placeholder="Expanded description (e.g. Combination Lock)"
+                    value={newLockExpanded}
+                    onChange={(e) => setNewLockExpanded(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded px-3 py-1 text-xs text-slate-200 flex-1 min-w-[200px] focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button 
+                    onClick={() => {
+                      if (!newLockAbbr.trim() || !newLockExpanded.trim()) return;
+                      const key = newLockAbbr.toUpperCase().trim();
+                      const val = newLockExpanded.trim();
+                      const updated = { ...lockDictionary, [key]: val };
+                      saveLockDictionary(updated);
+                      setNewLockAbbr('');
+                      setNewLockExpanded('');
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-1 rounded text-xs transition"
+                  >
+                    Add Mapping
                   </button>
                 </div>
               </div>
@@ -3680,10 +4486,30 @@ export default function RushBaggageWizard() {
                             const rushTag = getMappedVal('rushTag');
                             const flight = getMappedVal('flightNo') || 'LH760';
                             const dest = getMappedVal('destination') || 'BOM';
-                            const weight = getMappedVal('weight');
+                            const weightRaw = getMappedVal('weight');
                             const damaged = getMappedVal('damaged');
-                            const locked = getMappedVal('ln');
+                            const rawLocked = getMappedVal('ln');
                             const protocol = getMappedVal('protocol');
+
+                            // Compute weight display matching the executed import
+                            let weightStr = '-';
+                            if (weightRaw !== '') {
+                              const cleanWeight = weightRaw.replace(/(kg|kgs|lbs|lb)\s*$/i, '').trim();
+                              const parsed = Number(cleanWeight);
+                              if (!isNaN(parsed) && parsed >= 0) {
+                                weightStr = `${parsed} kg`;
+                              }
+                            }
+
+                            // Compute lock dictionary expansion
+                            let lockedDisp = rawLocked;
+                            if (rawLocked !== '') {
+                              const keys = Object.keys(lockDictionary);
+                              const matchedKey = keys.find(k => k.toLowerCase() === rawLocked.toLowerCase());
+                              if (matchedKey) {
+                                lockedDisp = lockDictionary[matchedKey];
+                              }
+                            }
 
                             return (
                               <tr key={rIdx} className="hover:bg-slate-900/40">
@@ -3705,15 +4531,8 @@ export default function RushBaggageWizard() {
                                   <span className="font-mono bg-slate-900 px-1.5 py-0.5 rounded text-indigo-300 font-bold">{flight}</span>
                                   <span className="text-slate-500 ml-1">→ {dest}</span>
                                 </td>
-                                <td className="py-2 px-3 font-mono">
-                                  {weight ? (
-                                    (() => {
-                                      const parsed = Number(weight.replace(/[^0-9.]/g, ''));
-                                      return !isNaN(parsed) && parsed > 0 ? `${parsed} kg` : <span className="text-slate-600">-</span>;
-                                    })()
-                                  ) : (
-                                    <span className="text-slate-600">-</span>
-                                  )}
+                                <td className="py-2 px-3 font-mono text-indigo-300">
+                                  {weightStr}
                                 </td>
                                 <td className="py-2 px-3 text-center">
                                   {/^(y|yes|true|dmg|damaged|1)$/i.test(damaged) ? (
@@ -3723,13 +4542,13 @@ export default function RushBaggageWizard() {
                                   )}
                                 </td>
                                 <td className="py-2 px-3 text-center">
-                                  {locked ? (
+                                  {lockedDisp ? (
                                     <span className={
-                                      /^(n|no|false)$/i.test(locked)
+                                      /^(n|no|false)$/i.test(lockedDisp)
                                         ? 'text-slate-500 font-bold'
                                         : 'text-red-400 font-bold font-mono'
                                     }>
-                                      {locked}
+                                      {lockedDisp}
                                     </span>
                                   ) : (
                                     <span className="text-slate-600">-</span>
@@ -3777,6 +4596,37 @@ export default function RushBaggageWizard() {
                       </div>
                     </div>
 
+                    {/* Secondary Data Quality Metrics */}
+                    <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80 text-left space-y-3">
+                      <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">
+                        Data Quality & Enrichment Metrics
+                      </h5>
+                      <div className="grid grid-cols-2 gap-4 text-xs font-mono">
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center text-slate-300">
+                            <span>Blank Weights:</span>
+                            <span className="text-slate-400 font-bold">{importSummaryResult.blankWeights}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-slate-300">
+                            <span>Invalid Weights:</span>
+                            <span className={importSummaryResult.invalidWeights > 0 ? "text-amber-400 font-bold" : "text-slate-400 font-bold"}>
+                              {importSummaryResult.invalidWeights}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center text-slate-300">
+                            <span>Recognized Locks:</span>
+                            <span className="text-indigo-400 font-bold">{importSummaryResult.recognizedLocks}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-slate-300">
+                            <span>Unrecognized Locks:</span>
+                            <span className="text-emerald-400 font-bold">{importSummaryResult.unrecognizedLocks}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     <button
                       onClick={() => {
                         setShowImportDialog(false);
@@ -3785,6 +4635,7 @@ export default function RushBaggageWizard() {
                         setExcelHeaders([]);
                         setRawPasteText('');
                         setImportSummaryResult(null);
+                        setActiveSection('dashboard');
                       }}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-xs transition"
                     >
@@ -4556,6 +5407,203 @@ export default function RushBaggageWizard() {
               >
                 Confirm Delete
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CAMERA BARCODE SCANNER MODAL */}
+      <ScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScanSuccess={handleScanSuccess}
+        title={scannerTargetField === 'bulk' ? 'Continuous Bulk Scanning (Bulk)' : 'Scan Baggage Barcode'}
+        isContinuous={scannerTargetField === 'bulk'}
+        continuousCount={continuousScannedTags.length}
+        onFinishContinuous={handleFinishContinuous}
+      />
+
+      {/* DUPLICATE RESOLVER MODAL */}
+      {showDuplicatesResolver && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200" style={{ maxHeight: '90vh' }}>
+            {/* Header */}
+            <div className="p-5 border-b border-slate-800 bg-slate-900/55 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2.5 text-amber-500">
+                <AlertTriangle className="w-5 h-5 animate-pulse" />
+                <div>
+                  <h3 className="font-bold text-slate-100 text-sm">Duplicate Baggage Tags Detected</h3>
+                  <p className="text-[10px] text-slate-400">Some scanned or entered tags conflict with existing records</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowDuplicatesResolver(false)}
+                className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Batch Select Tools */}
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                Batch Resolution Actions:
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkDuplicatesList(prev => prev.map(d => ({ ...d, resolution: 'skip' })));
+                  }}
+                  className="px-3 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] font-semibold text-slate-300 rounded cursor-pointer transition"
+                >
+                  Set All: Skip
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkDuplicatesList(prev => prev.map(d => ({ ...d, resolution: 'replace' })));
+                  }}
+                  className="px-3 py-1 bg-indigo-950 hover:bg-indigo-900 border border-indigo-800/60 text-[10px] font-semibold text-indigo-300 rounded cursor-pointer transition"
+                >
+                  Set All: Replace
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkDuplicatesList(prev => prev.map(d => ({ ...d, resolution: 'keep' })));
+                  }}
+                  className="px-3 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] font-semibold text-emerald-400 rounded cursor-pointer transition"
+                >
+                  Set All: Keep Both
+                </button>
+              </div>
+            </div>
+
+            {/* Main scrollable area of duplicates list */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-slate-900/40">
+              {bulkDuplicatesList.map((item, index) => (
+                <div 
+                  key={item.tag}
+                  className="p-4 bg-slate-950 rounded-xl border border-slate-850 flex flex-col md:flex-row md:items-center justify-between gap-4 transition hover:border-slate-800"
+                >
+                  {/* Left block: tag identifier info */}
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono font-bold text-slate-200 bg-slate-900 px-2.5 py-1 rounded border border-slate-800 tracking-widest">
+                        {item.tag}
+                      </span>
+                      {item.isExistingInDb ? (
+                        <span className="text-[9px] font-bold uppercase px-2 py-0.5 bg-red-950/60 text-red-400 border border-red-900/40 rounded">
+                          DB Conflict
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-bold uppercase px-2 py-0.5 bg-amber-950/60 text-amber-400 border border-amber-900/40 rounded">
+                          Batch Dup
+                        </span>
+                      )}
+                    </div>
+                    
+                    {item.existingRecord ? (
+                      <p className="text-[10px] text-slate-500 leading-normal">
+                        Passenger: <strong className="text-slate-300">{item.existingRecord.name}</strong> • PIR: <strong className="text-slate-300">{item.existingRecord.pir}</strong> • Flight: <strong className="text-slate-300">{item.existingRecord.flightNo}</strong>
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-slate-500">
+                        This tag is repeated multiple times in your current bulk operations list.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Right block: selector buttons */}
+                  <div className="flex gap-1.5 self-start md:self-center">
+                    {/* Skip button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkDuplicatesList(prev => {
+                          const next = [...prev];
+                          next[index] = { ...next[index], resolution: 'skip' };
+                          return next;
+                        });
+                      }}
+                      className={`px-3 py-1.5 rounded text-[10px] font-bold border transition cursor-pointer ${
+                        item.resolution === 'skip'
+                          ? 'bg-slate-800 border-slate-700 text-slate-300'
+                          : 'bg-slate-950 border-slate-900 text-slate-500 hover:border-slate-850 hover:text-slate-400'
+                      }`}
+                    >
+                      Skip
+                    </button>
+
+                    {/* Replace / Update button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkDuplicatesList(prev => {
+                          const next = [...prev];
+                          next[index] = { ...next[index], resolution: 'replace' };
+                          return next;
+                        });
+                      }}
+                      className={`px-3 py-1.5 rounded text-[10px] font-bold border transition cursor-pointer ${
+                        item.resolution === 'replace'
+                          ? 'bg-indigo-600 border-indigo-500 text-white shadow shadow-indigo-600/10'
+                          : 'bg-slate-950 border-slate-900 text-slate-500 hover:border-slate-850 hover:text-slate-400'
+                      }`}
+                    >
+                      Update Existing
+                    </button>
+
+                    {/* Keep / Create extra button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkDuplicatesList(prev => {
+                          const next = [...prev];
+                          next[index] = { ...next[index], resolution: 'keep' };
+                          return next;
+                        });
+                      }}
+                      className={`px-3 py-1.5 rounded text-[10px] font-bold border transition cursor-pointer ${
+                        item.resolution === 'keep'
+                          ? 'bg-emerald-600 border-emerald-500 text-white shadow shadow-emerald-600/10'
+                          : 'bg-slate-950 border-slate-900 text-slate-500 hover:border-slate-850 hover:text-slate-400'
+                      }`}
+                    >
+                      Keep Both
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer with counts and process confirmation button */}
+            <div className="p-4 bg-slate-900 border-t border-slate-800/80 flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
+              <div className="text-[10px] text-slate-400 text-center sm:text-left leading-normal font-mono">
+                Skipping: <span className="text-slate-200 font-bold">{bulkDuplicatesList.filter(d => d.resolution === 'skip').length}</span> • 
+                Updating: <span className="text-indigo-400 font-bold">{bulkDuplicatesList.filter(d => d.resolution === 'replace').length}</span> • 
+                Keeping: <span className="text-emerald-400 font-bold">{bulkDuplicatesList.filter(d => d.resolution === 'keep').length}</span>
+              </div>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setShowDuplicatesResolver(false)}
+                  className="flex-1 sm:flex-initial px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold cursor-pointer transition"
+                >
+                  Cancel Resolver
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const tags = parseBulkInput(bulkTagsInput);
+                    saveBulkRecords(tags, bulkDuplicatesList);
+                  }}
+                  className="flex-1 sm:flex-initial px-5 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white rounded-lg text-xs font-bold cursor-pointer shadow-lg shadow-indigo-600/10 transition"
+                >
+                  Save &amp; Apply Resolutions
+                </button>
+              </div>
             </div>
           </div>
         </div>
