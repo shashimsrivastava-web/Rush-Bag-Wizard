@@ -65,6 +65,8 @@ interface BaggageRecord {
   forwardingDestination?: string;
   forwardingDate?: string;
   forwardedBy?: string;
+  forwardingRemarks?: string;
+  specificStorageLocation?: string;
 
   // Operational States
   status: 'Expected' | 'Received';
@@ -94,13 +96,6 @@ interface BaggageRecord {
   warehouseOption?: 'CWC Warehouse' | '';
   reexportOption?: 'Re-export to Carrier Hub' | '';
 
-  // Departure Forwarding Fields
-  forwardingFlightNo?: string;
-  forwardingDate?: string;
-  forwardingDestination?: string;
-  forwardedBy?: string;
-  forwardingRemarks?: string;
-  specificStorageLocation?: string;
 }
 
 interface DictionaryEntry {
