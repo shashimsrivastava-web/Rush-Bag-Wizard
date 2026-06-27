@@ -57,6 +57,14 @@ interface BaggageRecord {
   
   // Registry
   registryType: 'Arrival' | 'Departure';
+  
+  // Departure Specific
+  departureDisposition?: 'Awaiting Forwarding' | 'Forwarded on LHG Flight' | 'Collected by Passenger' | 'Returned to Airline' | 'Other';
+  departureStorageLocation?: 'LHG Office' | 'BMA' | 'Level 4';
+  forwardingFlightNo?: string;
+  forwardingDestination?: string;
+  forwardingDate?: string;
+  forwardedBy?: string;
 
   // Operational States
   status: 'Expected' | 'Received';
@@ -409,6 +417,7 @@ export default function RushBaggageWizard() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<'dashboard' | 'scanner' | 'protocol' | 'registry'>('dashboard');
   const [activeRegistry, setActiveRegistry] = useState<'Arrival' | 'Departure' | 'Combined'>('Combined');
+  const [registrationContext, setRegistrationContext] = useState<'arrival' | 'departure'>('arrival');
 
   // Stable date reference to keep rendering pure
   const [now] = useState(() => Date.now());
@@ -501,6 +510,8 @@ export default function RushBaggageWizard() {
   const [bulkDeliveryAgent, setBulkDeliveryAgent] = useState<'VVM' | 'Outlook' | 'Advik' | ''>('VVM');
   const [bulkStorageOption, setBulkStorageOption] = useState<'Standard Warehousing – LHG Office' | ''>('Standard Warehousing – LHG Office');
   const [bulkDomesticForwarding, setBulkDomesticForwarding] = useState<'Air India' | 'IndiGo' | 'SpiceJet' | 'No Forwarding' | ''>('No Forwarding');
+  const [bulkForwardingFlight, setBulkForwardingFlight] = useState<string>('');
+  const [bulkForwardingDate, setBulkForwardingDate] = useState<string>('');
   const [bulkArrivalBelt, setBulkArrivalBelt] = useState<'Arrival Belt 9' | ''>('Arrival Belt 9');
   const [bulkHandoverOption, setBulkHandoverOption] = useState<'Partner Airlines' | ''>('Partner Airlines');
   const [bulkWarehouseOption, setBulkWarehouseOption] = useState<'CWC Warehouse' | ''>('CWC Warehouse');
@@ -923,8 +934,16 @@ export default function RushBaggageWizard() {
       disposition: newBag.status === 'Received' ? 'Storage' : 'Pending',
       dispositionLocation: newBag.status === 'Received' ? 'LHG Office' : '',
       dispositionUpdatedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
-      registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry,
+      registryType: registrationContext === 'arrival' ? 'Arrival' : 'Departure',
       createdAt: new Date().toISOString(),
+
+      // Departure Specific
+      departureDisposition: registrationContext === 'departure' ? newBag.departureDisposition : undefined,
+      departureStorageLocation: registrationContext === 'departure' ? newBag.departureStorageLocation : undefined,
+      forwardingFlightNo: registrationContext === 'departure' ? newBag.forwardingFlightNo : undefined,
+      forwardingDestination: registrationContext === 'departure' ? newBag.forwardingDestination : undefined,
+      forwardingDate: registrationContext === 'departure' ? newBag.forwardingDate : undefined,
+      forwardedBy: registrationContext === 'departure' ? newBag.forwardedBy : undefined,
 
       // New properties
       weight: newBag.weight !== undefined && !isNaN(Number(newBag.weight)) ? Number(newBag.weight) : undefined,
@@ -1083,6 +1102,8 @@ export default function RushBaggageWizard() {
         deliveryAgent: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
         storageOption: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
         domesticForwarding: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
+        forwardingFlightNo: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkForwardingFlight : undefined,
+        forwardingDate: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkForwardingDate : undefined,
         arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
         handoverOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
         warehouseOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
@@ -2498,19 +2519,25 @@ export default function RushBaggageWizard() {
             {/* Quick Actions Buttons */}
             <div className="flex gap-4">
               <button
-                onClick={() => setShowImportDialog(true)}
-                className="flex-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition shadow cursor-pointer"
-              >
-                <Upload className="w-4 h-4 text-indigo-400" />
-                <span>Import BDO Excel</span>
-              </button>
-
-              <button
-                onClick={() => setShowAddForm(!showAddForm)}
+                onClick={() => {
+                   setRegistrationContext('arrival');
+                   setShowAddForm(true);
+                }}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition shadow shadow-indigo-600/10 cursor-pointer"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>Add Additional Bag</span>
+                <span>Register Arrival</span>
+              </button>
+
+              <button
+                onClick={() => {
+                   setRegistrationContext('departure');
+                   setShowAddForm(true);
+                }}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition shadow shadow-indigo-600/10 cursor-pointer"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Register Departure</span>
               </button>
             </div>
 
@@ -2518,12 +2545,27 @@ export default function RushBaggageWizard() {
               <div className="bg-slate-900 border border-indigo-500/30 rounded-xl p-5 shadow-xl space-y-4 animate-in fade-in zoom-in duration-200">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                   <div className="flex flex-col">
-                    <h3 className="font-bold text-slate-200 text-sm">Add Additional Baggage Module</h3>
-                    <span className="text-[10px] text-slate-400">Gate Scanner &amp; Reconciliation Operations</span>
+                    <h3 className="font-bold text-slate-200 text-sm">
+                      {registrationContext === 'arrival' ? 'Register Arrival Baggage' : 'Register Departure Baggage'}
+                    </h3>
+                    <span className="text-[10px] text-slate-400">
+                      {registrationContext === 'arrival' ? 'Arrival Left-Behind Registry' : 'Departure Left-Behind Registry'}
+                    </span>
                   </div>
-                  <button onClick={() => setShowAddForm(false)} className="cursor-pointer">
-                    <X className="w-4 h-4 text-slate-400 hover:text-slate-200" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {registrationContext === 'arrival' && (
+                       <button
+                         onClick={() => setShowImportDialog(true)}
+                         className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 hover:bg-slate-800 text-indigo-400 text-[10px] font-bold px-2 py-1 rounded transition cursor-pointer"
+                       >
+                         <Upload className="w-3 h-3" />
+                         Import BDO Excel
+                       </button>
+                    )}
+                    <button onClick={() => setShowAddForm(false)} className="cursor-pointer">
+                      <X className="w-4 h-4 text-slate-400 hover:text-slate-200" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Mode Selector Tab */}
@@ -3124,18 +3166,40 @@ export default function RushBaggageWizard() {
                               )}
 
                               {bulkClearedAction === 'domesticForwarding' && (
-                                <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
-                                  <select
-                                    required
-                                    value={bulkDomesticForwarding}
-                                    onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                  >
-                                    <option value="Air India">Air India</option>
-                                    <option value="IndiGo">IndiGo</option>
-                                    <option value="SpiceJet">SpiceJet</option>
-                                  </select>
+                                <div className="space-y-3">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                    <select
+                                      required
+                                      value={bulkDomesticForwarding}
+                                      onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Air India">Air India</option>
+                                      <option value="IndiGo">IndiGo</option>
+                                      <option value="SpiceJet">SpiceJet</option>
+                                    </select>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Flight No *</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={bulkForwardingFlight}
+                                      onChange={(e) => setBulkForwardingFlight(e.target.value)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Date *</label>
+                                    <input
+                                      type="date"
+                                      required
+                                      value={bulkForwardingDate}
+                                      onChange={(e) => setBulkForwardingDate(e.target.value)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
+                                    />
+                                  </div>
                                 </div>
                               )}
                             </div>
