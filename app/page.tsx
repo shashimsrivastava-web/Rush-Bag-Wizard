@@ -288,6 +288,28 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
     dispositionUpdatedAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(), // 9 days ago - eligible for Auto-Purge
     registryType: 'Arrival',
     createdAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString()
+  },
+  {
+    id: 'bag-7',
+    sno: '7',
+    pir: 'DEP_LH_11111',
+    name: 'TEST DEPARTURE',
+    originalTag: '0724771999',
+    rushTag: '',
+    flightNo: 'LH762',
+    seal: 'S-40599',
+    ln: 'L01',
+    destination: 'FRA',
+    remarks: 'Test departure bag',
+    storageRemarks: '',
+    status: 'Received',
+    receivedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    disposition: 'Awaiting Forwarding',
+    dispositionLocation: 'LHG Office',
+    dispositionUpdatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    registryType: 'Departure',
+    customsStatus: 'Pending',
+    createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
   }
 ];
 
