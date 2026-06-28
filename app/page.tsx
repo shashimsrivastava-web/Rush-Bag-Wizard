@@ -40,6 +40,10 @@ import {
 import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
 import ScannerModal from './components/ScannerModal';
 
+// Configurable Flight Numbers
+const ARRIVAL_FLIGHTS = ['LH760', 'LH762', 'LX146', 'LX2646'];
+const DEPARTURE_FLIGHTS = ['LH763', 'LH760', 'LX147', 'LX2647'];
+
 // Interfaces based on BDO Format
 interface BaggageRecord {
   id: string;
@@ -59,14 +63,16 @@ interface BaggageRecord {
   registryType: 'Arrival' | 'Departure';
   
   // Departure Specific
-  departureDisposition?: 'Awaiting Forwarding' | 'Forwarded on LHG Flight' | 'Collected by Passenger' | 'Returned to Airline' | 'Other';
+  departureForwardingStatus?: 'Awaiting Forwarding' | 'Forwarding Sent';
   departureStorageLocation?: 'LHG Office' | 'BMA' | 'Level 4';
+  leftBehindReason?: string;
   forwardingFlightNo?: string;
   forwardingDestination?: string;
   forwardingDate?: string;
   forwardedBy?: string;
   forwardingRemarks?: string;
   specificStorageLocation?: string;
+  bmaStorageLocation?: string;
 
   // Operational States
   status: 'Expected' | 'Received';
@@ -479,7 +485,11 @@ export default function RushBaggageWizard() {
     arrivalBelt: 'Arrival Belt 9',
     handoverOption: 'Partner Airlines',
     warehouseOption: 'CWC Warehouse',
-    reexportOption: 'Re-export to Carrier Hub'
+    reexportOption: 'Re-export to Carrier Hub',
+    departureForwardingStatus: 'Awaiting Forwarding',
+    departureStorageLocation: 'LHG Office',
+    leftBehindReason: '',
+    bmaStorageLocation: ''
   });
 
   // Bulk Edit Dialog state
@@ -524,6 +534,15 @@ export default function RushBaggageWizard() {
   const [bulkHandoverOption, setBulkHandoverOption] = useState<'Partner Airlines' | ''>('Partner Airlines');
   const [bulkWarehouseOption, setBulkWarehouseOption] = useState<'CWC Warehouse' | ''>('CWC Warehouse');
   const [bulkReexportOption, setBulkReexportOption] = useState<'Re-export to Carrier Hub' | ''>('Re-export to Carrier Hub');
+
+  // Departure Bulk States
+  const [bulkDepartureForwardingStatus, setBulkDepartureForwardingStatus] = useState<'Awaiting Forwarding' | 'Forwarding Sent'>('Awaiting Forwarding');
+  const [bulkDepartureStorageLocation, setBulkDepartureStorageLocation] = useState<'LHG Office' | 'BMA' | 'Level 4'>('LHG Office');
+  const [bulkLeftBehindReason, setBulkLeftBehindReason] = useState<string>('');
+  const [bulkBmaStorageLocation, setBulkBmaStorageLocation] = useState<string>('');
+  const [bulkForwardingRemarks, setBulkForwardingRemarks] = useState<string>('');
+  const [bulkForwardingDestination, setBulkForwardingDestination] = useState<string>('');
+  const [bulkForwardedBy, setBulkForwardedBy] = useState<string>('');
 
   const [bulkFlightNo, setBulkFlightNo] = useState<string>('');
   const [bulkDestination, setBulkDestination] = useState<string>('');
@@ -864,6 +883,7 @@ export default function RushBaggageWizard() {
     setScannerSearchType(type);
 
     if (type === 'tag') {
+      const canonicalTag = getCanonicalTag(query, iataAirlineMap);
       const match = baggageList.find(b => 
         (b.originalTag && matchTag(b.originalTag, query, iataAirlineMap)) ||
         (b.rushTag && matchTag(b.rushTag, query, iataAirlineMap))
@@ -872,12 +892,12 @@ export default function RushBaggageWizard() {
       if (match) {
         setScannerResult(match);
         setScannerNotification({
-          text: `MATCH FOUND: Baggage Tag ${getCanonicalTag(query, iataAirlineMap)} is already registered.`,
+          text: `MATCH FOUND: Baggage Tag ${canonicalTag} is already registered.`,
           type: 'success'
         });
       } else {
         setScannerNotification({
-          text: `NO RECORD FOUND: Tag '${query}' was not found. Register this as a new record?`,
+          text: `No matching baggage record found. Would you like to register this baggage?`,
           type: 'warning'
         });
       }
@@ -961,36 +981,39 @@ export default function RushBaggageWizard() {
       seal: (newBag.seal || '').toUpperCase(),
       ln: newBag.ln || '', // Free text for Locked indicator (such as PAD, CL, Y, N)
       destination: (newBag.destination || '').toUpperCase(),
-      remarks: newBag.remarks || 'Additional manually registered bag',
+      remarks: registrationContext === 'arrival' ? (newBag.remarks || 'Additional manually registered bag') : '',
       storageRemarks: newBag.storageRemarks || '',
       status: newBag.status as 'Expected' | 'Received',
       receivedAt: newBag.receivedAt || (newBag.status === 'Received' ? new Date().toISOString() : undefined),
-      customsStatus: (newBag.customsStatus || 'Pending') as BaggageRecord['customsStatus'],
-      customsReason: (newBag.customsStatus === 'Not Cleared' ? newBag.customsReason : '') as BaggageRecord['customsReason'],
+      customsStatus: (registrationContext === 'arrival' ? (newBag.customsStatus || 'Pending') : 'Pending') as BaggageRecord['customsStatus'],
+      customsReason: (registrationContext === 'arrival' && newBag.customsStatus === 'Not Cleared' ? newBag.customsReason : '') as BaggageRecord['customsReason'],
       customsUpdatedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
-      disposition: newBag.status === 'Received' ? 'Storage' : 'Pending',
-      dispositionLocation: newBag.status === 'Received' ? 'LHG Office' : '',
+      disposition: registrationContext === 'arrival' ? (newBag.status === 'Received' ? 'Storage' : 'Pending') : (newBag.departureForwardingStatus === 'Forwarding Sent' ? 'Forwarded' : 'Awaiting Forwarding'),
+      dispositionLocation: registrationContext === 'arrival' ? (newBag.status === 'Received' ? 'LHG Office' : '') : (newBag.departureStorageLocation || ''),
       dispositionUpdatedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
       registryType: registrationContext === 'arrival' ? 'Arrival' : 'Departure',
       createdAt: new Date().toISOString(),
 
       // Departure Specific
-      departureDisposition: registrationContext === 'departure' ? newBag.departureDisposition : undefined,
+      departureForwardingStatus: registrationContext === 'departure' ? newBag.departureForwardingStatus : undefined,
       departureStorageLocation: registrationContext === 'departure' ? newBag.departureStorageLocation : undefined,
-      forwardingFlightNo: registrationContext === 'departure' ? newBag.forwardingFlightNo : undefined,
-      forwardingDestination: registrationContext === 'departure' ? newBag.forwardingDestination : undefined,
-      forwardingDate: registrationContext === 'departure' ? newBag.forwardingDate : undefined,
-      forwardedBy: registrationContext === 'departure' ? newBag.forwardedBy : undefined,
+      leftBehindReason: registrationContext === 'departure' ? newBag.leftBehindReason : undefined,
+      bmaStorageLocation: (registrationContext === 'departure' && newBag.departureStorageLocation === 'BMA') ? newBag.bmaStorageLocation : undefined,
+      forwardingFlightNo: (registrationContext === 'departure' && newBag.departureForwardingStatus === 'Forwarding Sent') ? newBag.forwardingFlightNo : undefined,
+      forwardingDestination: (registrationContext === 'departure' && newBag.departureForwardingStatus === 'Forwarding Sent') ? newBag.forwardingDestination : undefined,
+      forwardingDate: (registrationContext === 'departure' && newBag.departureForwardingStatus === 'Forwarding Sent') ? newBag.forwardingDate : undefined,
+      forwardedBy: (registrationContext === 'departure' && newBag.departureForwardingStatus === 'Forwarding Sent') ? newBag.forwardedBy : undefined,
+      forwardingRemarks: (registrationContext === 'departure' && newBag.departureForwardingStatus === 'Forwarding Sent') ? newBag.forwardingRemarks : undefined,
 
       // New properties
       weight: newBag.weight !== undefined && !isNaN(Number(newBag.weight)) ? Number(newBag.weight) : undefined,
       damaged: (newBag.damaged || 'N') as 'Y' | 'N',
-      protocol: finalProtocol as 'Cleared Baggage' | 'Non-Cleared / Other',
-      deliveryAgent: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'deliveryAgent') ? (newBag.deliveryAgent || 'VVM') as any : undefined,
-      storageOption: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'storage') ? (newBag.storageOption || 'Standard Warehousing – LHG Office') as any : undefined,
-      domesticForwarding: (finalProtocol === 'Cleared Baggage' && finalClearedAction === 'domesticForwarding') ? (newBag.domesticForwarding || 'No Forwarding') as any : undefined,
-      arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'arrivalBelt') ? (newBag.arrivalBelt || 'Arrival Belt 9') as any : undefined,
-      handoverOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'handover') ? (newBag.handoverOption || 'Partner Airlines') as any : undefined,
+      protocol: registrationContext === 'arrival' ? (finalProtocol as 'Cleared Baggage' | 'Non-Cleared / Other') : undefined,
+      deliveryAgent: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && finalClearedAction === 'deliveryAgent') ? (newBag.deliveryAgent || 'VVM') as any : undefined,
+      storageOption: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && finalClearedAction === 'storage') ? (newBag.storageOption || 'Standard Warehousing – LHG Office') as any : undefined,
+      domesticForwarding: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && finalClearedAction === 'domesticForwarding') ? (newBag.domesticForwarding || 'No Forwarding') as any : undefined,
+      arrivalBelt: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'arrivalBelt') ? (newBag.arrivalBelt || 'Arrival Belt 9') as any : undefined,
+      handoverOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'handover') ? (newBag.handoverOption || 'Partner Airlines') as any : undefined,
       warehouseOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'warehouse') ? (newBag.warehouseOption || 'CWC Warehouse') as any : undefined,
       reexportOption: (finalProtocol === 'Non-Cleared / Other' && finalNonClearedAction === 'reexport') ? (newBag.reexportOption || 'Re-export to Carrier Hub') as any : undefined
     };
@@ -1134,7 +1157,7 @@ export default function RushBaggageWizard() {
       }
       processedCanonicalTags.add(canonical);
 
-      const finalProtocol = bulkProtocol || 'Cleared Baggage';
+      const finalProtocol = registrationContext === 'arrival' ? (bulkProtocol || 'Cleared Baggage') : undefined;
       const isReceived = bulkStatus === 'Received';
       
       const record: BaggageRecord = {
@@ -1147,31 +1170,40 @@ export default function RushBaggageWizard() {
         flightNo: bulkFlightNo,
         seal: bulkSeal.toUpperCase(),
         ln: bulkLn,
-        destination: bulkDestination.toUpperCase() || 'BOM',
-        remarks: `Bulk registered during session (${new Date().toLocaleDateString()})`,
-        storageRemarks: '',
+        destination: registrationContext === 'arrival' ? (bulkDestination.toUpperCase() || 'BOM') : bulkForwardingDestination.toUpperCase(),
+        remarks: registrationContext === 'arrival' ? `Bulk registered during session (${new Date().toLocaleDateString()})` : '',
+        storageRemarks: registrationContext === 'arrival' ? '' : bulkForwardingRemarks,
         status: bulkStatus,
         receivedAt: newBag.receivedAt || (isReceived ? new Date().toISOString() : undefined),
         customsStatus: 'Pending',
         customsUpdatedAt: isReceived ? new Date().toISOString() : undefined,
-        disposition: isReceived ? 'Storage' : 'Pending',
-        dispositionLocation: isReceived ? 'LHG Office' : '',
+        disposition: registrationContext === 'arrival' ? (isReceived ? 'Storage' : 'Pending') : (bulkDepartureForwardingStatus === 'Forwarding Sent' ? 'Forwarded' : 'Awaiting Forwarding'),
+        dispositionLocation: registrationContext === 'arrival' ? (isReceived ? 'LHG Office' : '') : bulkDepartureStorageLocation,
         dispositionUpdatedAt: isReceived ? new Date().toISOString() : undefined,
         createdAt: new Date().toISOString(),
+
+        // Departure Specific
+        departureForwardingStatus: registrationContext === 'departure' ? bulkDepartureForwardingStatus : undefined,
+        departureStorageLocation: registrationContext === 'departure' ? bulkDepartureStorageLocation : undefined,
+        leftBehindReason: registrationContext === 'departure' ? bulkLeftBehindReason : undefined,
+        bmaStorageLocation: (registrationContext === 'departure' && bulkDepartureStorageLocation === 'BMA') ? bulkBmaStorageLocation : undefined,
+        forwardingFlightNo: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingFlight : undefined,
+        forwardingDestination: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingDestination : undefined,
+        forwardingDate: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingDate : undefined,
+        forwardedBy: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardedBy : undefined,
+        forwardingRemarks: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingRemarks : undefined,
 
         weight: bulkWeight,
         damaged: bulkDamaged,
         protocol: finalProtocol as any,
-        deliveryAgent: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
-        storageOption: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
-        domesticForwarding: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
-        forwardingFlightNo: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkForwardingFlight : undefined,
-        forwardingDate: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkForwardingDate : undefined,
-        arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
-        handoverOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
-        warehouseOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
-        reexportOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined,
-        registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry
+        deliveryAgent: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
+        storageOption: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
+        domesticForwarding: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
+        arrivalBelt: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
+        handoverOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
+        warehouseOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
+        reexportOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined,
+        registryType: registrationContext === 'arrival' ? 'Arrival' : 'Departure' as any
       };
 
       finalRecords.push(record);
@@ -1184,7 +1216,7 @@ export default function RushBaggageWizard() {
       );
 
       if (matchReplacement) {
-        const finalProtocol = bulkProtocol || 'Cleared Baggage';
+        const finalProtocol = registrationContext === 'arrival' ? (bulkProtocol || 'Cleared Baggage') : undefined;
         const isReceived = bulkStatus === 'Received';
 
         return {
@@ -1192,19 +1224,32 @@ export default function RushBaggageWizard() {
           flightNo: bulkFlightNo,
           seal: bulkSeal.toUpperCase() || item.seal,
           ln: bulkLn || item.ln,
-          destination: bulkDestination.toUpperCase() || item.destination,
+          destination: registrationContext === 'arrival' ? (bulkDestination.toUpperCase() || item.destination) : (bulkForwardingDestination.toUpperCase() || item.destination),
           status: bulkStatus,
           receivedAt: isReceived ? (item.receivedAt || new Date().toISOString()) : item.receivedAt,
           weight: bulkWeight !== undefined ? bulkWeight : item.weight,
           damaged: bulkDamaged !== undefined ? bulkDamaged : item.damaged,
           protocol: finalProtocol as any,
-          deliveryAgent: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
-          storageOption: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
-          domesticForwarding: (finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
-          arrivalBelt: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
-          handoverOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
-          warehouseOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
-          reexportOption: (finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined
+
+          // Departure Specific
+          departureForwardingStatus: registrationContext === 'departure' ? bulkDepartureForwardingStatus : item.departureForwardingStatus,
+          departureStorageLocation: registrationContext === 'departure' ? bulkDepartureStorageLocation : item.departureStorageLocation,
+          leftBehindReason: registrationContext === 'departure' ? bulkLeftBehindReason : item.leftBehindReason,
+          bmaStorageLocation: (registrationContext === 'departure' && bulkDepartureStorageLocation === 'BMA') ? bulkBmaStorageLocation : item.bmaStorageLocation,
+          forwardingFlightNo: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingFlight : item.forwardingFlightNo,
+          forwardingDestination: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingDestination : item.forwardingDestination,
+          forwardingDate: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingDate : item.forwardingDate,
+          forwardedBy: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardedBy : item.forwardedBy,
+          forwardingRemarks: (registrationContext === 'departure' && bulkDepartureForwardingStatus === 'Forwarding Sent') ? bulkForwardingRemarks : item.forwardingRemarks,
+
+          deliveryAgent: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'deliveryAgent') ? bulkDeliveryAgent as any : undefined,
+          storageOption: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'storage') ? bulkStorageOption as any : undefined,
+          domesticForwarding: (registrationContext === 'arrival' && finalProtocol === 'Cleared Baggage' && bulkClearedAction === 'domesticForwarding') ? bulkDomesticForwarding as any : undefined,
+          arrivalBelt: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'arrivalBelt') ? bulkArrivalBelt as any : undefined,
+          handoverOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'handover') ? bulkHandoverOption as any : undefined,
+          warehouseOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'warehouse') ? bulkWarehouseOption as any : undefined,
+          reexportOption: (registrationContext === 'arrival' && finalProtocol === 'Non-Cleared / Other' && bulkNonClearedAction === 'reexport') ? bulkReexportOption as any : undefined,
+          registryType: registrationContext === 'arrival' ? 'Arrival' : 'Departure' as any
         };
       }
       return item;
@@ -1225,50 +1270,71 @@ export default function RushBaggageWizard() {
     e.preventDefault();
     if (!editingRecord) return;
 
-    // Protocol validation
-    if (!editingRecord.protocol) {
-      alert('Dispositions & Customs Operations Protocol is required');
-      return;
-    }
-
-    // Dynamic fields validation when visible (only visible fields are mandatory)
-    if (editingRecord.protocol === 'Cleared Baggage') {
-      if (!editingClearedAction) {
-        alert('Cleared Baggage Action is required');
+    // Protocol and context-specific validation
+    if (editingRecord.registryType === 'Departure') {
+      if (!editingRecord.departureForwardingStatus) {
+        alert('Forwarding Status is required');
         return;
       }
-      if (editingClearedAction === 'deliveryAgent' && !editingRecord.deliveryAgent) {
-        alert('Delivery Agent is required');
-        return;
-      }
-      if (editingClearedAction === 'storage' && !editingRecord.storageOption) {
+      if (!editingRecord.departureStorageLocation) {
         alert('Storage Location is required');
         return;
       }
-      if (editingClearedAction === 'domesticForwarding' && !editingRecord.domesticForwarding) {
-        alert('Forward Via is required');
+      if (editingRecord.departureForwardingStatus === 'Forwarding Sent') {
+        if (!editingRecord.forwardingFlightNo || !editingRecord.forwardingDate || !editingRecord.forwardingDestination || !editingRecord.forwardedBy) {
+          alert('All forwarding details are mandatory when status is Forwarding Sent');
+          return;
+        }
+      }
+      if (editingRecord.departureStorageLocation === 'BMA' && !editingRecord.bmaStorageLocation) {
+        alert('BMA Storage Location / Remarks is required');
         return;
       }
-    } else if (editingRecord.protocol === 'Non-Cleared / Other') {
-      if (!editingNonClearedAction) {
-        alert('Non-Cleared / Other Action is required');
+    } else {
+      // Arrival Specific Validation
+      if (!editingRecord.protocol) {
+        alert('Dispositions & Customs Operations Protocol is required');
         return;
       }
-      if (editingNonClearedAction === 'arrivalBelt' && !editingRecord.arrivalBelt) {
-        alert('Arrival Belt is required');
-        return;
-      }
-      if (editingNonClearedAction === 'handover' && !editingRecord.handoverOption) {
-        alert('Handover option is required');
-        return;
-      }
-      if (editingNonClearedAction === 'warehouse' && !editingRecord.warehouseOption) {
-        alert('Warehouse option is required');
-        return;
-      }
-      if (editingNonClearedAction === 'reexport' && !editingRecord.reexportOption) {
-        alert('Re-export option is required');
-        return;
+
+      if (editingRecord.protocol === 'Cleared Baggage') {
+        if (!editingClearedAction) {
+          alert('Cleared Baggage Action is required');
+          return;
+        }
+        if (editingClearedAction === 'deliveryAgent' && !editingRecord.deliveryAgent) {
+          alert('Delivery Agent is required');
+          return;
+        }
+        if (editingClearedAction === 'storage' && !editingRecord.storageOption) {
+          alert('Storage Location is required');
+          return;
+        }
+        if (editingClearedAction === 'domesticForwarding' && !editingRecord.domesticForwarding) {
+          alert('Forward Via is required');
+          return;
+        }
+      } else if (editingRecord.protocol === 'Non-Cleared / Other') {
+        if (!editingNonClearedAction) {
+          alert('Non-Cleared / Other Action is required');
+          return;
+        }
+        if (editingNonClearedAction === 'arrivalBelt' && !editingRecord.arrivalBelt) {
+          alert('Arrival Belt is required');
+          return;
+        }
+        if (editingNonClearedAction === 'handover' && !editingRecord.handoverOption) {
+          alert('Handover option is required');
+          return;
+        }
+        if (editingNonClearedAction === 'warehouse' && !editingRecord.warehouseOption) {
+          alert('Warehouse option is required');
+          return;
+        }
+        if (editingNonClearedAction === 'reexport' && !editingRecord.reexportOption) {
+          alert('Re-export option is required');
+          return;
+        }
       }
     }
 
@@ -1281,7 +1347,7 @@ export default function RushBaggageWizard() {
         let receivedAt = editingRecord.receivedAt || item.receivedAt;
         if (!wasReceived && isReceived) {
           receivedAt = new Date().toISOString();
-        } else if (!isReceived) {
+        } else if (!isReceived && editingRecord.registryType !== 'Departure') {
           receivedAt = undefined;
         }
 
@@ -1293,13 +1359,13 @@ export default function RushBaggageWizard() {
 
         return {
           ...editingRecord,
-          deliveryAgent: (editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'deliveryAgent') ? editingRecord.deliveryAgent as any : undefined,
-          storageOption: (editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'storage') ? editingRecord.storageOption as any : undefined,
-          domesticForwarding: (editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'domesticForwarding') ? editingRecord.domesticForwarding as any : undefined,
-          arrivalBelt: (editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'arrivalBelt') ? editingRecord.arrivalBelt as any : undefined,
-          handoverOption: (editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'handover') ? editingRecord.handoverOption as any : undefined,
-          warehouseOption: (editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'warehouse') ? editingRecord.warehouseOption as any : undefined,
-          reexportOption: (editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'reexport') ? editingRecord.reexportOption as any : undefined,
+          deliveryAgent: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'deliveryAgent') ? editingRecord.deliveryAgent as any : undefined,
+          storageOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'storage') ? editingRecord.storageOption as any : undefined,
+          domesticForwarding: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'domesticForwarding') ? editingRecord.domesticForwarding as any : undefined,
+          arrivalBelt: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'arrivalBelt') ? editingRecord.arrivalBelt as any : undefined,
+          handoverOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'handover') ? editingRecord.handoverOption as any : undefined,
+          warehouseOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'warehouse') ? editingRecord.warehouseOption as any : undefined,
+          reexportOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'reexport') ? editingRecord.reexportOption as any : undefined,
           receivedAt,
           dispositionUpdatedAt,
           customsUpdatedAt: item.customsStatus !== editingRecord.customsStatus ? new Date().toISOString() : item.customsUpdatedAt
@@ -2196,21 +2262,7 @@ export default function RushBaggageWizard() {
             </button>
           </form>
 
-          <div className="mt-8 pt-6 border-t border-slate-800/80 text-center">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Default Operator Accounts</h3>
-            <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-500 text-left bg-slate-950/60 p-3 rounded-lg">
-              <div>
-                <p className="font-bold text-slate-400">LH Standard User</p>
-                <p>User: <span className="text-indigo-400 font-mono">lh</span></p>
-                <p>Pass: <span className="text-indigo-400 font-mono">welcome</span></p>
-              </div>
-              <div className="border-l border-slate-800 pl-3">
-                <p className="font-bold text-slate-400">Admin (Delete Privs)</p>
-                <p>User: <span className="text-indigo-400 font-mono">admin</span></p>
-                <p>Pass: <span className="text-indigo-400 font-mono">Admin220!</span></p>
-              </div>
-            </div>
-          </div>
+          {/* Removed default operator accounts display */}
         </div>
       </div>
     );
@@ -2673,23 +2725,22 @@ export default function RushBaggageWizard() {
                 }`}>
                   <p className="font-semibold">{scannerNotification.text}</p>
                   {scannerNotification.type === 'warning' && scannerSearchType === 'tag' && (
-                    <div className="mt-2 flex gap-2">
+                    <div className="mt-3 flex flex-col sm:flex-row gap-2">
                       <button
                         type="button"
                         onClick={() => {
                           const canonical = getCanonicalTag(scannedQuery, iataAirlineMap);
-                          const isRush = scannedQuery.startsWith('LX') || (scannedQuery.length === 8 && /^[A-Z]{2}/.test(scannedQuery));
                           setNewBag(prev => ({
                             ...prev,
-                            originalTag: isRush ? '' : canonical,
-                            rushTag: isRush ? canonical : '',
+                            originalTag: canonical,
+                            rushTag: '',
                             receivedAt: new Date().toISOString()
                           }));
                           setRegistrationContext('arrival');
                           setShowAddForm(true);
                           setScannerNotification(null);
                         }}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl cursor-pointer transition shadow-xl shadow-indigo-600/10 active:scale-95 text-center"
                       >
                         Register as Original Tag
                       </button>
@@ -2707,9 +2758,16 @@ export default function RushBaggageWizard() {
                           setShowAddForm(true);
                           setScannerNotification(null);
                         }}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                        className="bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl cursor-pointer transition shadow-xl shadow-amber-600/10 active:scale-95 text-center"
                       >
                         Register as Rush Tag
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setScannerNotification(null)}
+                        className="bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl cursor-pointer transition text-center"
+                      >
+                        Cancel
                       </button>
                     </div>
                   )}
@@ -2881,12 +2939,19 @@ export default function RushBaggageWizard() {
                           onChange={(e) => setNewBag({...newBag, flightNo: e.target.value})}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer font-semibold"
                         >
-                          <option value="LH760">LH760</option>
-                          <option value="LH762">LH762</option>
-                          <option value="LX146">LX146</option>
-                          <option value="LX2646">LX2646</option>
-                          <option value="LHG Other">LHG Other</option>
-                          <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                          <option value="">Select Flight</option>
+                          {registrationContext === 'arrival' ? (
+                            <>
+                              {ARRIVAL_FLIGHTS.map(f => <option key={f} value={f}>{f}</option>)}
+                              <option value="LHG Other">LHG Other</option>
+                              <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                            </>
+                          ) : (
+                            <>
+                              {DEPARTURE_FLIGHTS.map(f => <option key={f} value={f}>{f}</option>)}
+                              <option value="LHG Other">LHG Other</option>
+                            </>
+                          )}
                         </select>
                       </div>
 
@@ -3075,7 +3140,7 @@ export default function RushBaggageWizard() {
                       </div>
                     </div>
 
-                    {newBag.status === 'Received' && (
+                    {registrationContext === 'arrival' && newBag.status === 'Received' && (
                       <div className="bg-slate-950 p-3 rounded border border-slate-800 space-y-3">
                         <p className="text-[10px] uppercase font-bold text-indigo-400">Arrived Baggage Quick setup</p>
                         <div className="grid grid-cols-2 gap-2">
@@ -3112,266 +3177,421 @@ export default function RushBaggageWizard() {
                       </div>
                     )}
 
-                    {/* Dispositions & Customs Operations Protocol Workflow Selector */}
-                    <div className="space-y-1 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
-                      <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Dispositions &amp; Customs Operations Protocol *</label>
-                      <select
-                        value={newBag.protocol}
-                        onChange={(e) => {
-                          const nextProtocol = e.target.value as any;
-                          setNewBagClearedAction('');
-                          setNewBagNonClearedAction('');
-                          setNewBag({
-                            ...newBag,
-                            protocol: nextProtocol,
-                            deliveryAgent: undefined,
-                            storageOption: undefined,
-                            domesticForwarding: undefined,
-                            arrivalBelt: undefined,
-                            handoverOption: undefined,
-                            warehouseOption: undefined,
-                            reexportOption: undefined
-                          });
-                        }}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
-                      >
-                        <option value="">-- Choose Protocol to determine remainder of workflow --</option>
-                        <option value="Cleared Baggage">Cleared Baggage</option>
-                        <option value="Non-Cleared / Other">Non-Cleared / Other</option>
-                      </select>
-                    </div>
-
-                    {/* Dynamic Fields with smooth Framer Motion expand/collapse animation */}
-                    <AnimatePresence initial={false}>
-                      {newBag.protocol && (
-                        <motion.div
-                          key={newBag.protocol}
-                          initial={{ opacity: 0, height: 0, scale: 0.98 }}
-                          animate={{ opacity: 1, height: 'auto', scale: 1 }}
-                          exit={{ opacity: 0, height: 0, scale: 0.98 }}
-                          transition={{ duration: 0.3, ease: 'easeInOut' }}
-                          className="bg-slate-950/80 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
-                        >
-                          <div className="border-b border-slate-800/80 pb-2 flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
-                              {newBag.protocol} Workflow Protocol
-                            </span>
-                            <span className="text-[9px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">Rule-based options</span>
+                    {registrationContext === 'departure' && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/60">
+                          {/* Forwarding Status */}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Forwarding Status *</label>
+                            <select
+                              required
+                              value={newBag.departureForwardingStatus}
+                              onChange={(e) => setNewBag({...newBag, departureForwardingStatus: e.target.value as any})}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                            >
+                              <option value="Awaiting Forwarding">Awaiting Forwarding</option>
+                              <option value="Forwarding Sent">Forwarding Sent</option>
+                            </select>
                           </div>
 
-                          {newBag.protocol === 'Cleared Baggage' ? (
-                            <div className="space-y-4">
-                              {/* Level 2: Master dropdown for Cleared Baggage Action */}
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
-                                <select
-                                  value={newBagClearedAction}
-                                  onChange={(e) => {
-                                    const act = e.target.value;
-                                    setNewBagClearedAction(act);
-                                    setNewBag(prev => ({
-                                      ...prev,
-                                      deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
-                                      storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
-                                      domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
-                                    }));
-                                  }}
-                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                >
-                                  <option value="">-- Select Cleared Baggage Action --</option>
-                                  <option value="deliveryAgent">Delivery Agent</option>
-                                  <option value="storage">Storage</option>
-                                  <option value="domesticForwarding">Domestic Baggage Forwarding</option>
-                                </select>
+                          {/* Storage Location */}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Storage Location *</label>
+                            <select
+                              required
+                              value={newBag.departureStorageLocation}
+                              onChange={(e) => setNewBag({...newBag, departureStorageLocation: e.target.value as any})}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                            >
+                              <option value="LHG Office">LHG Office</option>
+                              <option value="BMA">BMA</option>
+                              <option value="Level 4">Level 4</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Conditional Forwarding Sent Fields */}
+                        <AnimatePresence>
+                          {newBag.departureForwardingStatus === 'Forwarding Sent' && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-indigo-950/10 p-3 rounded-lg border border-indigo-500/20"
+                            >
+                              <div className="col-span-2 md:col-span-1">
+                                <label className="text-[9px] font-bold text-indigo-400 uppercase">Forwarding Flight *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="e.g. LH763"
+                                  value={newBag.forwardingFlightNo || ''}
+                                  onChange={(e) => setNewBag({...newBag, forwardingFlightNo: e.target.value.toUpperCase()})}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
+                                />
                               </div>
-
-                              <AnimatePresence initial={false}>
-                                {newBagClearedAction === 'deliveryAgent' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
-                                    <select
-                                      value={newBag.deliveryAgent || 'VVM'}
-                                      onChange={(e) => setNewBag({...newBag, deliveryAgent: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="VVM">VVM</option>
-                                      <option value="Outlook">Outlook</option>
-                                      <option value="Advik">Advik</option>
-                                    </select>
-                                  </motion.div>
-                                )}
-
-                                {newBagClearedAction === 'storage' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
-                                    <select
-                                      value={newBag.storageOption || 'Standard Warehousing – LHG Office'}
-                                      onChange={(e) => setNewBag({...newBag, storageOption: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
-                                    </select>
-                                  </motion.div>
-                                )}
-
-                                {newBagClearedAction === 'domesticForwarding' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
-                                    <select
-                                      value={newBag.domesticForwarding || 'Air India'}
-                                      onChange={(e) => setNewBag({...newBag, domesticForwarding: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="Air India">Air India</option>
-                                      <option value="IndiGo">IndiGo</option>
-                                      <option value="SpiceJet">SpiceJet</option>
-                                    </select>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          ) : (
-                            <div className="space-y-4">
-                              {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
-                                <select
-                                  value={newBagNonClearedAction}
-                                  onChange={(e) => {
-                                    const act = e.target.value;
-                                    setNewBagNonClearedAction(act);
-                                    setNewBag(prev => ({
-                                      ...prev,
-                                      arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
-                                      handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
-                                      warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
-                                      reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
-                                    }));
-                                  }}
-                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                >
-                                  <option value="">-- Select Non-Cleared / Other Action --</option>
-                                  <option value="arrivalBelt">Arrival Belt</option>
-                                  <option value="handover">Handover</option>
-                                  <option value="warehouse">Warehouse</option>
-                                  <option value="reexport">Re-export</option>
-                                </select>
+                              <div className="col-span-2 md:col-span-1">
+                                <label className="text-[9px] font-bold text-indigo-400 uppercase">Forwarding Date *</label>
+                                <input
+                                  type="date"
+                                  required
+                                  value={newBag.forwardingDate || ''}
+                                  onChange={(e) => setNewBag({...newBag, forwardingDate: e.target.value})}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
+                                />
                               </div>
-
-                              <AnimatePresence initial={false}>
-                                {newBagNonClearedAction === 'arrivalBelt' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
-                                    <select
-                                      value={newBag.arrivalBelt || 'Arrival Belt 9'}
-                                      onChange={(e) => setNewBag({...newBag, arrivalBelt: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="Arrival Belt 9">Belt 9 (Default)</option>
-                                    </select>
-                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Default holding area with queue check.</p>
-                                  </motion.div>
-                                )}
-
-                                {newBagNonClearedAction === 'handover' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
-                                    <select
-                                      value={newBag.handoverOption || 'Partner Airlines'}
-                                      onChange={(e) => setNewBag({...newBag, handoverOption: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="Partner Airlines">Partner Airlines</option>
-                                    </select>
-                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Transfer custody to the designated partner airline.</p>
-                                  </motion.div>
-                                )}
-
-                                {newBagNonClearedAction === 'warehouse' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
-                                    <select
-                                      value={newBag.warehouseOption || 'CWC Warehouse'}
-                                      onChange={(e) => setNewBag({...newBag, warehouseOption: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="CWC Warehouse">CWC Warehouse</option>
-                                    </select>
-                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Secure central depot storage.</p>
-                                  </motion.div>
-                                )}
-
-                                {newBagNonClearedAction === 'reexport' && (
-                                  <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="space-y-1 overflow-hidden"
-                                  >
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
-                                    <select
-                                      value={newBag.reexportOption || 'Re-export to Carrier Hub'}
-                                      onChange={(e) => setNewBag({...newBag, reexportOption: e.target.value as any})}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                    >
-                                      <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
-                                    </select>
-                                    <p className="text-[9px] text-slate-500 italic mt-0.5">Repatriate the baggage to the originating carrier&apos;s hub.</p>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
+                              <div className="col-span-2 md:col-span-1">
+                                <label className="text-[9px] font-bold text-indigo-400 uppercase">Destination *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="e.g. FRA"
+                                  value={newBag.forwardingDestination || ''}
+                                  onChange={(e) => setNewBag({...newBag, forwardingDestination: e.target.value.toUpperCase()})}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs font-mono"
+                                />
+                              </div>
+                              <div className="col-span-2 md:col-span-1">
+                                <label className="text-[9px] font-bold text-indigo-400 uppercase">Forwarded By *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="Staff ID / Name"
+                                  value={newBag.forwardedBy || ''}
+                                  onChange={(e) => setNewBag({...newBag, forwardedBy: e.target.value.toUpperCase()})}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                              <div className="col-span-2 md:col-span-4">
+                                <label className="text-[9px] font-bold text-indigo-400 uppercase">Forwarding Remarks (Optional)</label>
+                                <input
+                                  type="text"
+                                  placeholder="Additional forwarding details..."
+                                  value={newBag.forwardingRemarks || ''}
+                                  onChange={(e) => setNewBag({...newBag, forwardingRemarks: e.target.value})}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                            </motion.div>
                           )}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                        </AnimatePresence>
 
-                    {/* Remarks */}
+                        {/* Conditional Storage Location Fields */}
+                        <AnimatePresence>
+                          {newBag.departureStorageLocation === 'BMA' && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="bg-amber-950/10 p-3 rounded-lg border border-amber-500/20"
+                            >
+                              <label className="text-[9px] font-bold text-amber-400 uppercase">BMA Storage Location / Remarks *</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="e.g. Cage 3, Rack A2, Shelf B..."
+                                value={newBag.bmaStorageLocation || ''}
+                                onChange={(e) => setNewBag({...newBag, bmaStorageLocation: e.target.value})}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-3 py-1.5 rounded text-xs"
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        <AnimatePresence>
+                          {(newBag.departureStorageLocation === 'LHG Office' || newBag.departureStorageLocation === 'Level 4') && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="bg-slate-950/40 p-3 rounded-lg border border-slate-800"
+                            >
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">Storage Remarks (Optional)</label>
+                              <input
+                                type="text"
+                                placeholder="Internal storage notes..."
+                                value={newBag.storageRemarks || ''}
+                                onChange={(e) => setNewBag({...newBag, storageRemarks: e.target.value})}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-3 py-1.5 rounded text-xs"
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    )}
+
+                    {/* Dispositions & Customs Operations Protocol Workflow Selector - Arrival Only */}
+                    {registrationContext === 'arrival' && (
+                      <>
+                        <div className="space-y-1 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Dispositions &amp; Customs Operations Protocol *</label>
+                          <select
+                            value={newBag.protocol}
+                            onChange={(e) => {
+                              const nextProtocol = e.target.value as any;
+                              setNewBagClearedAction('');
+                              setNewBagNonClearedAction('');
+                              setNewBag({
+                                ...newBag,
+                                protocol: nextProtocol,
+                                deliveryAgent: undefined,
+                                storageOption: undefined,
+                                domesticForwarding: undefined,
+                                arrivalBelt: undefined,
+                                handoverOption: undefined,
+                                warehouseOption: undefined,
+                                reexportOption: undefined
+                              });
+                            }}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                          >
+                            <option value="">-- Choose Protocol to determine remainder of workflow --</option>
+                            <option value="Cleared Baggage">Cleared Baggage</option>
+                            <option value="Non-Cleared / Other">Non-Cleared / Other</option>
+                          </select>
+                        </div>
+
+                        {/* Dynamic Fields with smooth Framer Motion expand/collapse animation */}
+                        <AnimatePresence initial={false}>
+                          {newBag.protocol && (
+                            <motion.div
+                              key={newBag.protocol}
+                              initial={{ opacity: 0, height: 0, scale: 0.98 }}
+                              animate={{ opacity: 1, height: 'auto', scale: 1 }}
+                              exit={{ opacity: 0, height: 0, scale: 0.98 }}
+                              transition={{ duration: 0.3, ease: 'easeInOut' }}
+                              className="bg-slate-950/80 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
+                            >
+                              <div className="border-b border-slate-800/80 pb-2 flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
+                                  {newBag.protocol} Workflow Protocol
+                                </span>
+                                <span className="text-[9px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">Rule-based options</span>
+                              </div>
+
+                              {newBag.protocol === 'Cleared Baggage' ? (
+                                <div className="space-y-4">
+                                  {/* Level 2: Master dropdown for Cleared Baggage Action */}
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
+                                    <select
+                                      value={newBagClearedAction}
+                                      onChange={(e) => {
+                                        const act = e.target.value;
+                                        setNewBagClearedAction(act);
+                                        setNewBag(prev => ({
+                                          ...prev,
+                                          deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
+                                          storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
+                                          domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
+                                        }));
+                                      }}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                    >
+                                      <option value="">-- Select Cleared Baggage Action --</option>
+                                      <option value="deliveryAgent">Delivery Agent</option>
+                                      <option value="storage">Storage</option>
+                                      <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                                    </select>
+                                  </div>
+
+                                  <AnimatePresence initial={false}>
+                                    {newBagClearedAction === 'deliveryAgent' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
+                                        <select
+                                          value={newBag.deliveryAgent || 'VVM'}
+                                          onChange={(e) => setNewBag({...newBag, deliveryAgent: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="VVM">VVM</option>
+                                          <option value="Outlook">Outlook</option>
+                                          <option value="Advik">Advik</option>
+                                        </select>
+                                      </motion.div>
+                                    )}
+
+                                    {newBagClearedAction === 'storage' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
+                                        <select
+                                          value={newBag.storageOption || 'Standard Warehousing – LHG Office'}
+                                          onChange={(e) => setNewBag({...newBag, storageOption: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
+                                        </select>
+                                      </motion.div>
+                                    )}
+
+                                    {newBagClearedAction === 'domesticForwarding' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                        <select
+                                          value={newBag.domesticForwarding || 'Air India'}
+                                          onChange={(e) => setNewBag({...newBag, domesticForwarding: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="Air India">Air India</option>
+                                          <option value="IndiGo">IndiGo</option>
+                                          <option value="SpiceJet">SpiceJet</option>
+                                        </select>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
+                              ) : (
+                                <div className="space-y-4">
+                                  {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
+                                    <select
+                                      value={newBagNonClearedAction}
+                                      onChange={(e) => {
+                                        const act = e.target.value;
+                                        setNewBagNonClearedAction(act);
+                                        setNewBag(prev => ({
+                                          ...prev,
+                                          arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
+                                          handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
+                                          warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
+                                          reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
+                                        }));
+                                      }}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                    >
+                                      <option value="">-- Select Non-Cleared / Other Action --</option>
+                                      <option value="arrivalBelt">Arrival Belt</option>
+                                      <option value="handover">Handover</option>
+                                      <option value="warehouse">Warehouse</option>
+                                      <option value="reexport">Re-export</option>
+                                    </select>
+                                  </div>
+
+                                  <AnimatePresence initial={false}>
+                                    {newBagNonClearedAction === 'arrivalBelt' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
+                                        <select
+                                          value={newBag.arrivalBelt || 'Arrival Belt 9'}
+                                          onChange={(e) => setNewBag({...newBag, arrivalBelt: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="Arrival Belt 9">Belt 9 (Default)</option>
+                                        </select>
+                                        <p className="text-[9px] text-slate-500 italic mt-0.5">Default holding area with queue check.</p>
+                                      </motion.div>
+                                    )}
+
+                                    {newBagNonClearedAction === 'handover' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
+                                        <select
+                                          value={newBag.handoverOption || 'Partner Airlines'}
+                                          onChange={(e) => setNewBag({...newBag, handoverOption: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="Partner Airlines">Partner Airlines</option>
+                                        </select>
+                                        <p className="text-[9px] text-slate-500 italic mt-0.5">Transfer custody to the designated partner airline.</p>
+                                      </motion.div>
+                                    )}
+
+                                    {newBagNonClearedAction === 'warehouse' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
+                                        <select
+                                          value={newBag.warehouseOption || 'CWC Warehouse'}
+                                          onChange={(e) => setNewBag({...newBag, warehouseOption: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="CWC Warehouse">CWC Warehouse</option>
+                                        </select>
+                                        <p className="text-[9px] text-slate-500 italic mt-0.5">Secure central depot storage.</p>
+                                      </motion.div>
+                                    )}
+
+                                    {newBagNonClearedAction === 'reexport' && (
+                                      <motion.div
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="space-y-1 overflow-hidden"
+                                      >
+                                        <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
+                                        <select
+                                          value={newBag.reexportOption || 'Re-export to Carrier Hub'}
+                                          onChange={(e) => setNewBag({...newBag, reexportOption: e.target.value as any})}
+                                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                        >
+                                          <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
+                                        </select>
+                                        <p className="text-[9px] text-slate-500 italic mt-0.5">Repatriate the baggage to the originating carrier&apos;s hub.</p>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </>
+                    )}
+
+                    {/* Remarks / Left Behind Reason */}
                     <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Remarks</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase">
+                        {registrationContext === 'arrival' ? 'Remarks' : 'Left Behind Reason'}
+                      </label>
                       <textarea
                         rows={2}
-                        placeholder="Add handling details..."
-                        value={newBag.remarks}
-                        onChange={(e) => setNewBag({...newBag, remarks: e.target.value})}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                        placeholder={registrationContext === 'arrival' ? 'Add handling details...' : 'Late acceptance, Security hold, etc.'}
+                        value={registrationContext === 'arrival' ? newBag.remarks : newBag.leftBehindReason}
+                        onChange={(e) => {
+                          if (registrationContext === 'arrival') {
+                            setNewBag({...newBag, remarks: e.target.value});
+                          } else {
+                            setNewBag({...newBag, leftBehindReason: e.target.value});
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs transition-all duration-200 ease-in-out"
                       />
                     </div>
 
@@ -3385,195 +3605,308 @@ export default function RushBaggageWizard() {
                 ) : (
                   /* BULK BAGGAGE OPERATIONS MODE */
                   <form onSubmit={handleProcessBulkAdd} className="space-y-4">
-                    {/* Bulk Dispositions & Customs Operations Protocol (TOP OF CONTAINER) */}
-                    <div className="bg-indigo-950/25 p-4 rounded-lg border border-indigo-500/20 space-y-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">
-                          Dispositions &amp; Customs Operations Protocol *
-                        </label>
-                        <select
-                          required
-                          value={bulkProtocol}
-                          onChange={(e) => {
-                            const nextProtocol = e.target.value as any;
-                            setBulkClearedAction('');
-                            setBulkNonClearedAction('');
-                            setBulkProtocol(nextProtocol);
-                          }}
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-indigo-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
-                        >
-                          <option value="">-- Choose Protocol to determine remainder of workflow --</option>
-                          <option value="Cleared Baggage">Cleared Baggage (Cleared for Delivery/Storage/Forwarding)</option>
-                          <option value="Non-Cleared / Other">Non-Cleared / Other (Arrival Belts/Handovers/CWC/Re-export)</option>
-                        </select>
-                      </div>
+                    {/* Bulk Dispositions & Customs Operations Protocol */}
+                    {registrationContext === 'arrival' ? (
+                      <div className="bg-indigo-950/25 p-4 rounded-lg border border-indigo-500/20 space-y-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">
+                            Dispositions &amp; Customs Operations Protocol *
+                          </label>
+                          <select
+                            required
+                            value={bulkProtocol}
+                            onChange={(e) => {
+                              const nextProtocol = e.target.value as any;
+                              setBulkClearedAction('');
+                              setBulkNonClearedAction('');
+                              setBulkProtocol(nextProtocol);
+                            }}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-indigo-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                          >
+                            <option value="">-- Choose Protocol to determine remainder of workflow --</option>
+                            <option value="Cleared Baggage">Cleared Baggage (Cleared for Delivery/Storage/Forwarding)</option>
+                            <option value="Non-Cleared / Other">Non-Cleared / Other (Arrival Belts/Handovers/CWC/Re-export)</option>
+                          </select>
+                        </div>
 
-                      {bulkProtocol && (
-                        <div className="bg-slate-950/80 p-3 rounded border border-slate-800 space-y-3">
-                          {bulkProtocol === 'Cleared Baggage' ? (
-                            <div className="space-y-3">
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
-                                <select
-                                  required
-                                  value={bulkClearedAction}
-                                  onChange={(e) => setBulkClearedAction(e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                >
-                                  <option value="">-- Select Cleared Baggage Action --</option>
-                                  <option value="deliveryAgent">Delivery Agent</option>
-                                  <option value="storage">Storage</option>
-                                  <option value="domesticForwarding">Domestic Baggage Forwarding</option>
-                                </select>
-                              </div>
-
-                              {bulkClearedAction === 'deliveryAgent' && (
+                        {bulkProtocol && (
+                          <div className="bg-slate-950/80 p-3 rounded border border-slate-800 space-y-3">
+                            {bulkProtocol === 'Cleared Baggage' ? (
+                              <div className="space-y-3">
                                 <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
                                   <select
                                     required
-                                    value={bulkDeliveryAgent}
-                                    onChange={(e) => setBulkDeliveryAgent(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    value={bulkClearedAction}
+                                    onChange={(e) => setBulkClearedAction(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
                                   >
-                                    <option value="VVM">VVM</option>
-                                    <option value="Outlook">Outlook</option>
-                                    <option value="Advik">Advik</option>
+                                    <option value="">-- Select Cleared Baggage Action --</option>
+                                    <option value="deliveryAgent">Delivery Agent</option>
+                                    <option value="storage">Storage</option>
+                                    <option value="domesticForwarding">Domestic Baggage Forwarding</option>
                                   </select>
                                 </div>
-                              )}
 
-                              {bulkClearedAction === 'storage' && (
-                                <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Storage Location *</label>
-                                  <select
-                                    required
-                                    value={bulkStorageOption}
-                                    onChange={(e) => setBulkStorageOption(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                  >
-                                    <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
-                                  </select>
-                                </div>
-                              )}
-
-                              {bulkClearedAction === 'domesticForwarding' && (
-                                <div className="space-y-3">
+                                {bulkClearedAction === 'deliveryAgent' && (
                                   <div className="space-y-1">
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
                                     <select
                                       required
-                                      value={bulkDomesticForwarding}
-                                      onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
+                                      value={bulkDeliveryAgent}
+                                      onChange={(e) => setBulkDeliveryAgent(e.target.value as any)}
                                       className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
                                     >
-                                      <option value="Air India">Air India</option>
-                                      <option value="IndiGo">IndiGo</option>
-                                      <option value="SpiceJet">SpiceJet</option>
+                                      <option value="VVM">VVM</option>
+                                      <option value="Outlook">Outlook</option>
+                                      <option value="Advik">Advik</option>
                                     </select>
                                   </div>
+                                )}
+
+                                {bulkClearedAction === 'storage' && (
                                   <div className="space-y-1">
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Flight No *</label>
-                                    <input
-                                      type="text"
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Storage Location *</label>
+                                    <select
                                       required
-                                      value={bulkForwardingFlight}
-                                      onChange={(e) => setBulkForwardingFlight(e.target.value)}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
-                                    />
+                                      value={bulkStorageOption}
+                                      onChange={(e) => setBulkStorageOption(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
+                                    </select>
                                   </div>
-                                  <div className="space-y-1">
-                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Date *</label>
-                                    <input
-                                      type="date"
-                                      required
-                                      value={bulkForwardingDate}
-                                      onChange={(e) => setBulkForwardingDate(e.target.value)}
-                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
-                                    />
+                                )}
+
+                                {bulkClearedAction === 'domesticForwarding' && (
+                                  <div className="space-y-3">
+                                    <div className="space-y-1">
+                                      <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                      <select
+                                        required
+                                        value={bulkDomesticForwarding}
+                                        onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
+                                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                      >
+                                        <option value="Air India">Air India</option>
+                                        <option value="IndiGo">IndiGo</option>
+                                        <option value="SpiceJet">SpiceJet</option>
+                                      </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Flight No *</label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={bulkForwardingFlight}
+                                        onChange={(e) => setBulkForwardingFlight(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[10px] font-bold text-slate-300 uppercase block">Forwarding Date *</label>
+                                      <input
+                                        type="date"
+                                        required
+                                        value={bulkForwardingDate}
+                                        onChange={(e) => setBulkForwardingDate(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded"
+                                      />
+                                    </div>
                                   </div>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
-                                <select
-                                  required
-                                  value={bulkNonClearedAction}
-                                  onChange={(e) => setBulkNonClearedAction(e.target.value)}
-                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                >
-                                  <option value="">-- Select Non-Cleared / Other Action --</option>
-                                  <option value="arrivalBelt">Arrival Belt</option>
-                                  <option value="handover">Handover</option>
-                                  <option value="warehouse">Warehouse</option>
-                                  <option value="reexport">Re-export</option>
-                                </select>
+                                )}
                               </div>
-
-                              {bulkNonClearedAction === 'arrivalBelt' && (
+                            ) : (
+                              <div className="space-y-3">
                                 <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
                                   <select
                                     required
-                                    value={bulkArrivalBelt}
-                                    onChange={(e) => setBulkArrivalBelt(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    value={bulkNonClearedAction}
+                                    onChange={(e) => setBulkNonClearedAction(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
                                   >
-                                    <option value="Arrival Belt 9">Belt 9 (Default)</option>
+                                    <option value="">-- Select Non-Cleared / Other Action --</option>
+                                    <option value="arrivalBelt">Arrival Belt</option>
+                                    <option value="handover">Handover</option>
+                                    <option value="warehouse">Warehouse</option>
+                                    <option value="reexport">Re-export</option>
                                   </select>
                                 </div>
-                              )}
 
-                              {bulkNonClearedAction === 'handover' && (
-                                <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
-                                  <select
-                                    required
-                                    value={bulkHandoverOption}
-                                    onChange={(e) => setBulkHandoverOption(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                  >
-                                    <option value="Partner Airlines">Partner Airlines</option>
-                                  </select>
-                                </div>
-                              )}
+                                {bulkNonClearedAction === 'arrivalBelt' && (
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
+                                    <select
+                                      required
+                                      value={bulkArrivalBelt}
+                                      onChange={(e) => setBulkArrivalBelt(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Arrival Belt 9">Belt 9 (Default)</option>
+                                    </select>
+                                  </div>
+                                )}
 
-                              {bulkNonClearedAction === 'warehouse' && (
-                                <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
-                                  <select
-                                    required
-                                    value={bulkWarehouseOption}
-                                    onChange={(e) => setBulkWarehouseOption(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                  >
-                                    <option value="CWC Warehouse">CWC Warehouse</option>
-                                  </select>
-                                </div>
-                              )}
+                                {bulkNonClearedAction === 'handover' && (
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
+                                    <select
+                                      required
+                                      value={bulkHandoverOption}
+                                      onChange={(e) => setBulkHandoverOption(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Partner Airlines">Partner Airlines</option>
+                                    </select>
+                                  </div>
+                                )}
 
-                              {bulkNonClearedAction === 'reexport' && (
-                                <div className="space-y-1">
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
-                                  <select
-                                    required
-                                    value={bulkReexportOption}
-                                    onChange={(e) => setBulkReexportOption(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                                  >
-                                    <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
-                                  </select>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                {bulkNonClearedAction === 'warehouse' && (
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
+                                    <select
+                                      required
+                                      value={bulkWarehouseOption}
+                                      onChange={(e) => setBulkWarehouseOption(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="CWC Warehouse">CWC Warehouse</option>
+                                    </select>
+                                  </div>
+                                )}
+
+                                {bulkNonClearedAction === 'reexport' && (
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
+                                    <select
+                                      required
+                                      value={bulkReexportOption}
+                                      onChange={(e) => setBulkReexportOption(e.target.value as any)}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
+                                    >
+                                      <option value="Re-export to Carrier Hub">Carrier Hub</option>
+                                    </select>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-indigo-950/25 p-4 rounded-lg border border-indigo-500/20 space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          {/* Bulk Forwarding Status */}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block">Forwarding Status *</label>
+                            <select
+                              required
+                              value={bulkDepartureForwardingStatus}
+                              onChange={(e) => setBulkDepartureForwardingStatus(e.target.value as any)}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                            >
+                              <option value="Awaiting Forwarding">Awaiting Forwarding</option>
+                              <option value="Forwarding Sent">Forwarding Sent</option>
+                            </select>
+                          </div>
+
+                          {/* Bulk Storage Location */}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block">Storage Location *</label>
+                            <select
+                              required
+                              value={bulkDepartureStorageLocation}
+                              onChange={(e) => setBulkDepartureStorageLocation(e.target.value as any)}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-semibold cursor-pointer"
+                            >
+                              <option value="LHG Office">LHG Office</option>
+                              <option value="BMA">BMA</option>
+                              <option value="Level 4">Level 4</option>
+                            </select>
+                          </div>
                         </div>
-                      )}
-                    </div>
 
+                        {/* Bulk Conditional Forwarding Fields */}
+                        <AnimatePresence>
+                          {bulkDepartureForwardingStatus === 'Forwarding Sent' && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="grid grid-cols-2 gap-3 bg-slate-950/60 p-3 rounded border border-slate-800"
+                            >
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarding Flight *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="LH763"
+                                  value={bulkForwardingFlight}
+                                  onChange={(e) => setBulkForwardingFlight(e.target.value.toUpperCase())}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarding Date *</label>
+                                <input
+                                  type="date"
+                                  required
+                                  value={bulkForwardingDate}
+                                  onChange={(e) => setBulkForwardingDate(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Destination *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="FRA"
+                                  value={bulkForwardingDestination}
+                                  onChange={(e) => setBulkForwardingDestination(e.target.value.toUpperCase())}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarded By *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="Staff ID"
+                                  value={bulkForwardedBy}
+                                  onChange={(e) => setBulkForwardedBy(e.target.value.toUpperCase())}
+                                  className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        {/* Bulk Conditional Storage Fields */}
+                        <AnimatePresence>
+                          {bulkDepartureStorageLocation === 'BMA' && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="bg-slate-950/60 p-3 rounded border border-slate-800"
+                            >
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">BMA Storage Location *</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="Cage/Rack location..."
+                                value={bulkBmaStorageLocation}
+                                onChange={(e) => setBulkBmaStorageLocation(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    )}
+                    
                     {/* Common Baggage Metadata Optional Fields Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-950/40 p-4 rounded-lg border border-slate-800/60">
                       {/* Flight No */}
@@ -3584,12 +3917,19 @@ export default function RushBaggageWizard() {
                           onChange={(e) => setBulkFlightNo(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs cursor-pointer font-semibold"
                         >
-                          <option value="LH760">LH760</option>
-                          <option value="LH762">LH762</option>
-                          <option value="LX146">LX146</option>
-                          <option value="LX2646">LX2646</option>
-                          <option value="LHG Other">LHG Other</option>
-                          <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                          <option value="">Select Flight</option>
+                          {registrationContext === 'arrival' ? (
+                            <>
+                              {ARRIVAL_FLIGHTS.map(f => <option key={f} value={f}>{f}</option>)}
+                              <option value="LHG Other">LHG Other</option>
+                              <option value="Other Airline (OAL) Received Bags">Other Airline (OAL) Received Bags</option>
+                            </>
+                          ) : (
+                            <>
+                              {DEPARTURE_FLIGHTS.map(f => <option key={f} value={f}>{f}</option>)}
+                              <option value="LHG Other">LHG Other</option>
+                            </>
+                          )}
                         </select>
                       </div>
 
@@ -5227,8 +5567,167 @@ export default function RushBaggageWizard() {
                 </div>
               </div>
 
-              {/* Protocol selector */}
-              <div className="space-y-1.5 bg-slate-950/20 p-3 rounded-lg border border-slate-800/60">
+              {/* Dynamic Content based on Registry Type */}
+              {editingRecord.registryType === 'Departure' ? (
+                /* Departure Specific Edit Workflow */
+                <div className="space-y-4">
+                  <div className="bg-indigo-950/20 p-4 rounded-lg border border-indigo-500/20 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Forwarding Status */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-indigo-400 uppercase block">Forwarding Status *</label>
+                        <select
+                          required
+                          value={editingRecord.departureForwardingStatus || 'Awaiting Forwarding'}
+                          onChange={(e) => setEditingRecord({
+                            ...editingRecord,
+                            departureForwardingStatus: e.target.value as any,
+                            disposition: (e.target.value === 'Forwarding Sent' ? 'Forwarded' : 'Awaiting Forwarding') as any
+                          })}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded cursor-pointer font-semibold"
+                        >
+                          <option value="Awaiting Forwarding">Awaiting Forwarding</option>
+                          <option value="Forwarding Sent">Forwarding Sent</option>
+                        </select>
+                      </div>
+
+                      {/* Storage Location */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-indigo-400 uppercase block">Storage Location *</label>
+                        <select
+                          required
+                          value={editingRecord.departureStorageLocation || 'LHG Office'}
+                          onChange={(e) => setEditingRecord({
+                            ...editingRecord,
+                            departureStorageLocation: e.target.value as any,
+                            dispositionLocation: e.target.value as any
+                          })}
+                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded cursor-pointer font-semibold"
+                        >
+                          <option value="LHG Office">LHG Office</option>
+                          <option value="BMA">BMA</option>
+                          <option value="Level 4">Level 4</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Conditional Forwarding Fields */}
+                    <AnimatePresence>
+                      {editingRecord.departureForwardingStatus === 'Forwarding Sent' && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="grid grid-cols-2 gap-3 bg-slate-950/60 p-3 rounded border border-slate-800"
+                        >
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarding Flight *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="LH763"
+                              value={editingRecord.forwardingFlightNo || ''}
+                              onChange={(e) => setEditingRecord({...editingRecord, forwardingFlightNo: e.target.value.toUpperCase()})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarding Date *</label>
+                            <input
+                              type="date"
+                              required
+                              value={editingRecord.forwardingDate || ''}
+                              onChange={(e) => setEditingRecord({...editingRecord, forwardingDate: e.target.value})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Destination *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="FRA"
+                              value={editingRecord.forwardingDestination || ''}
+                              onChange={(e) => setEditingRecord({...editingRecord, forwardingDestination: e.target.value.toUpperCase()})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarded By *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="Staff ID"
+                              value={editingRecord.forwardedBy || ''}
+                              onChange={(e) => setEditingRecord({...editingRecord, forwardedBy: e.target.value.toUpperCase()})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Forwarding Remarks</label>
+                            <input
+                              type="text"
+                              placeholder="Optional remarks..."
+                              value={editingRecord.forwardingRemarks || ''}
+                              onChange={(e) => setEditingRecord({...editingRecord, forwardingRemarks: e.target.value})}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Conditional Storage Fields */}
+                    <AnimatePresence>
+                      {editingRecord.departureStorageLocation === 'BMA' && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="bg-slate-950/60 p-3 rounded border border-slate-800"
+                        >
+                          <label className="text-[9px] font-bold text-slate-400 uppercase">BMA Storage Location *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Cage/Rack location..."
+                            value={editingRecord.bmaStorageLocation || ''}
+                            onChange={(e) => setEditingRecord({...editingRecord, bmaStorageLocation: e.target.value})}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    {(editingRecord.departureStorageLocation === 'LHG Office' || editingRecord.departureStorageLocation === 'Level 4') && (
+                      <div className="bg-slate-950/60 p-3 rounded border border-slate-800">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase">Storage Remarks</label>
+                        <input
+                          type="text"
+                          placeholder="Optional storage details..."
+                          value={editingRecord.storageRemarks || ''}
+                          onChange={(e) => setEditingRecord({...editingRecord, storageRemarks: e.target.value})}
+                          className="w-full bg-slate-900 border border-slate-800 text-slate-200 px-2 py-1.5 rounded text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">Left Behind Reason</label>
+                    <textarea
+                      rows={3}
+                      placeholder="Late acceptance, Security hold, etc."
+                      value={editingRecord.leftBehindReason || ''}
+                      onChange={(e) => setEditingRecord({...editingRecord, leftBehindReason: e.target.value})}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                    />
+                  </div>
+                </div>
+              ) : (
+                /* Arrival Specific Edit Workflow (Original Protocol & Status fields) */
+                <>
+                  {/* Protocol selector */}
+                  <div className="space-y-1.5 bg-slate-950/20 p-3 rounded-lg border border-slate-800/60">
                 <label className="text-[10px] font-bold text-indigo-400 uppercase block">Dispositions & Customs Operations Protocol *</label>
                 <select
                   required
@@ -5688,16 +6187,18 @@ export default function RushBaggageWizard() {
                 </>
               )}
 
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase">Operational Remarks & Notes</label>
-                <textarea
-                  rows={2}
-                  value={editingRecord.remarks || ''}
-                  onChange={(e) => setEditingRecord({...editingRecord, remarks: e.target.value})}
-                  placeholder="Insert notes..."
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                />
-              </div>
+              {/* Arrival Reconciliation Remarks field (Moved outside status check for consistency) */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">General Remarks</label>
+                    <textarea
+                      rows={2}
+                      value={editingRecord.remarks || ''}
+                      onChange={(e) => setEditingRecord({...editingRecord, remarks: e.target.value})}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
                 <button

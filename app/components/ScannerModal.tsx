@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Camera, Sparkles, CheckCircle2, Info, AlertTriangle } from 'lucide-react';
+import { X, Camera, Sparkles, CheckCircle2, Info, AlertTriangle, Flashlight } from 'lucide-react';
 import { getActiveScanner, IBaggageScanner, ScanResult } from '../lib/scanner';
 
 interface ScannerModalProps {
@@ -31,7 +31,16 @@ export default function ScannerModal({
   const [cameraActive, setCameraActive] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'detecting' | 'success'>('idle');
+  const [torchEnabled, setTorchEnabled] = useState(false);
   const scannerRef = useRef<IBaggageScanner | null>(null);
+
+  const toggleTorch = async () => {
+    if (scannerRef.current?.toggleTorch) {
+      const nextState = !torchEnabled;
+      await scannerRef.current.toggleTorch(nextState);
+      setTorchEnabled(nextState);
+    }
+  };
 
   const handleScanMatch = React.useCallback((result: ScanResult) => {
     setSuccessFlash(result);
@@ -200,6 +209,20 @@ export default function ScannerModal({
         {/* Camera Container */}
         <div className="relative aspect-video w-full bg-slate-950 overflow-hidden border-b border-slate-800 group">
           <div id="scanner-reader-container" className="w-full h-full absolute inset-0 z-10 grayscale-[0.2]" />
+
+          {/* Torch Toggle Button */}
+          {cameraActive && (
+            <button
+              onClick={toggleTorch}
+              className={`absolute top-4 right-4 z-30 p-3 rounded-full backdrop-blur-md transition-all border ${
+                torchEnabled 
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.3)]' 
+                  : 'bg-slate-950/40 border-slate-700/50 text-slate-400 hover:bg-slate-900/60'
+              }`}
+            >
+              <Flashlight className={`w-5 h-5 ${torchEnabled ? 'fill-current' : ''}`} />
+            </button>
+          )}
 
           {/* Reticle & Guidance Overlay */}
           {cameraActive && !successFlash && (
