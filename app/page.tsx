@@ -42,7 +42,7 @@ import ScannerModal from './components/ScannerModal';
 
 // Configurable Flight Numbers
 const ARRIVAL_FLIGHTS = ['LH760', 'LH762', 'LX146', 'LX2646'];
-const DEPARTURE_FLIGHTS = ['LH763', 'LH760', 'LX147', 'LX2647'];
+const DEPARTURE_FLIGHTS = ['LH763', 'LH761', 'LX147', 'LX2647'];
 
 // Interfaces based on BDO Format
 interface BaggageRecord {
