@@ -25,13 +25,13 @@ export default function ScannerModal({
   onFinishContinuous
 }: ScannerModalProps) {
   const [error, setError] = useState<string | null>(null);
-  const [successFlash, setSuccessFlash] = useState<ScanResult | null>(null);
   const [simulatedInput, setSimulatedInput] = useState('');
   const [providerName] = useState(() => getActiveScanner().name);
   const [cameraActive, setCameraActive] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'detecting' | 'success'>('idle');
   const [torchEnabled, setTorchEnabled] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<ScanResult | null>(null);
   const scannerRef = useRef<IBaggageScanner | null>(null);
 
   const toggleTorch = async () => {
@@ -43,19 +43,25 @@ export default function ScannerModal({
   };
 
   const handleScanMatch = React.useCallback((result: ScanResult) => {
-    setSuccessFlash(result);
+    if (pendingConfirmation) return; // Ignore if already waiting for confirmation
+    
+    setPendingConfirmation(result);
     setScanStatus('success');
-    onScanSuccess(result.tagNumber);
+  }, [pendingConfirmation]);
 
-    // Success flash duration
-    setTimeout(() => {
-      setSuccessFlash(null);
+  const confirmScan = () => {
+    if (!pendingConfirmation) return;
+    
+    const result = pendingConfirmation;
+    onScanSuccess(result.tagNumber);
+    setPendingConfirmation(null);
+
+    if (!isContinuous) {
+      onClose();
+    } else {
       setScanStatus('scanning');
-      if (!isContinuous) {
-        onClose();
-      }
-    }, 1500);
-  }, [onScanSuccess, isContinuous, onClose]);
+    }
+  };
 
   useEffect(() => {
     const provider = getActiveScanner();
@@ -128,43 +134,52 @@ export default function ScannerModal({
         className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col"
         style={{ maxHeight: '90vh' }}
       >
-        {/* Success Flash Overlay */}
+        {/* Confirmation Overlay */}
         <AnimatePresence>
-          {successFlash && (
+          {pendingConfirmation && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-emerald-500/30 backdrop-blur-md flex flex-col items-center justify-center z-50 text-center p-6"
+              className="absolute inset-0 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center z-[100] text-center p-8"
             >
               <motion.div 
-                initial={{ scale: 0.5, opacity: 0 }}
+                initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                className="bg-emerald-600 text-white p-5 rounded-full shadow-2xl mb-4 border-4 border-emerald-400/30"
+                className="bg-indigo-600 text-white p-6 rounded-full shadow-2xl mb-6 border-4 border-indigo-400/30"
               >
-                <CheckCircle2 className="w-16 h-16" />
+                <CheckCircle2 className="w-20 h-20" />
               </motion.div>
-              <h2 className="text-white text-3xl font-black font-mono tracking-tighter mb-1 uppercase">
-                Success ✓
+              
+              <h2 className="text-white text-2xl font-black mb-2 uppercase tracking-tight">
+                Baggage Scanned
               </h2>
-              <div className="bg-emerald-950/80 border border-emerald-500/40 px-6 py-2 rounded-xl">
-                <p className="text-emerald-100 text-lg font-bold font-mono tracking-widest uppercase">
-                  {successFlash.tagNumber}
+              
+              <div className="bg-slate-900 border-2 border-indigo-500/50 px-8 py-4 rounded-2xl mb-8 shadow-inner">
+                <p className="text-indigo-400 text-[10px] uppercase font-black tracking-[0.2em] mb-1">
+                  Tag Number
+                </p>
+                <p className="text-white text-4xl font-black font-mono tracking-widest">
+                  {pendingConfirmation.tagNumber}
                 </p>
               </div>
-              <div className="mt-4 flex flex-col gap-1 items-center">
-                <span className="text-emerald-400 text-[10px] uppercase font-bold tracking-widest bg-emerald-900/50 px-3 py-1 rounded-full border border-emerald-500/20">
-                  {successFlash.barcodeFormat} Detected
-                </span>
-                <span className="text-emerald-500/60 text-[9px] font-mono">
-                  Decode: {successFlash.scanTime}ms via {successFlash.scannerUsed}
-                </span>
-              </div>
+
+              <button
+                onClick={confirmScan}
+                className="w-full max-w-xs py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-lg font-black uppercase tracking-widest transition-all shadow-2xl shadow-indigo-600/30 active:scale-95 flex items-center justify-center gap-3"
+              >
+                Confirm OK
+                <CheckCircle2 className="w-6 h-6" />
+              </button>
+              
+              <p className="mt-6 text-slate-500 text-[10px] uppercase font-bold tracking-widest">
+                Verify tag before processing
+              </p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Error Overlay (Floating) */}
+        {/* Header */}
         <AnimatePresence>
           {error && (
             <motion.div
@@ -225,7 +240,7 @@ export default function ScannerModal({
           )}
 
           {/* Reticle & Guidance Overlay */}
-          {cameraActive && !successFlash && (
+          {cameraActive && !pendingConfirmation && (
             <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-center">
               {/* Wide IATA Reticle */}
               <div className="w-[85%] h-[40%] border border-white/20 rounded-2xl relative">
