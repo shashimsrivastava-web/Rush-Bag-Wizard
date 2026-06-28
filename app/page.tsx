@@ -102,6 +102,15 @@ interface BaggageRecord {
   warehouseOption?: 'CWC Warehouse' | '';
   reexportOption?: 'Re-export to Carrier Hub' | '';
 
+  // Redesign fields
+  preventiveReason?: string;
+  handoverAirline?: string;
+  handoverDateTime?: string;
+  warehouseReference?: string;
+  reexportFlight?: string;
+  reexportDestination?: string;
+  reexportDate?: string;
+  deliveryDateTime?: string;
 }
 
 interface DictionaryEntry {
@@ -499,6 +508,21 @@ export default function RushBaggageWizard() {
   const [bulkCustomsReason, setBulkCustomsReason] = useState<BaggageRecord['customsReason']>('');
   const [bulkDisposition, setBulkDisposition] = useState<'Pending' | 'Storage' | 'Delivered' | 'Forwarded' | 'Belt 9' | 'Handover' | 'CWC' | 'Re-export'>('Storage');
   const [bulkLocation, setBulkLocation] = useState<BaggageRecord['dispositionLocation']>('LHG Office');
+  
+  // Redesign Bulk Edit States
+  const [bulkPreventiveReason, setBulkPreventiveReason] = useState('');
+  const [bulkHandoverAirline, setBulkHandoverAirline] = useState('');
+  const [bulkHandoverDateTime, setBulkHandoverDateTime] = useState('');
+  const [bulkWarehouseReference, setBulkWarehouseReference] = useState('');
+  const [bulkReexportFlight, setBulkReexportFlight] = useState('');
+  const [bulkReexportDestination, setBulkReexportDestination] = useState('');
+  const [bulkReexportDate, setBulkReexportDate] = useState('');
+  const [bulkDeliveryDateTime, setBulkDeliveryDateTime] = useState('');
+  const [bulkForwardingFlightNo, setBulkForwardingFlightNo] = useState('');
+  const [bulkForwardingDateNew, setBulkForwardingDateNew] = useState('');
+  const [bulkForwardingDestinationNew, setBulkForwardingDestinationNew] = useState('');
+  const [bulkStorageRemarks, setBulkStorageRemarks] = useState('');
+  const [bulkRemarks, setBulkRemarks] = useState('');
 
   // Single Edit Dialog state
   const [editingRecord, setEditingRecord] = useState<BaggageRecord | null>(null);
@@ -1286,56 +1310,54 @@ export default function RushBaggageWizard() {
       }
     } else {
       // Arrival Specific Validation
-      if (!editingRecord.protocol) {
-        alert('Dispositions & Customs Operations Protocol is required');
+      if (!editingRecord.customsStatus || editingRecord.customsStatus === 'Pending') {
+        alert('Customs Status is required');
         return;
       }
 
-      if (editingRecord.protocol === 'Cleared Baggage') {
-        if (!editingClearedAction) {
-          alert('Cleared Baggage Action is required');
+      if (editingRecord.customsStatus === 'Not Cleared' || editingRecord.customsStatus === 'Marked Preventive') {
+        if (!editingRecord.preventiveReason) {
+          alert('Preventive Reason is required');
           return;
         }
-        if (editingClearedAction === 'deliveryAgent' && !editingRecord.deliveryAgent) {
-          alert('Delivery Agent is required');
+        if (!editingRecord.disposition || editingRecord.disposition === 'Pending') {
+          alert('Disposition is required');
           return;
         }
-        if (editingClearedAction === 'storage' && !editingRecord.storageOption) {
-          alert('Storage Location is required');
+
+        if (editingRecord.disposition === 'Handover') {
+          if (!editingRecord.handoverAirline) { alert('Partner Airline is required'); return; }
+          if (!editingRecord.handoverDateTime) { alert('Handover Date & Time is required'); return; }
+        }
+        if (editingRecord.disposition === 'CWC') {
+          if (!editingRecord.warehouseReference) { alert('Warehouse Reference is required'); return; }
+        }
+        if (editingRecord.disposition === 'Re-export') {
+          if (!editingRecord.reexportFlight) { alert('Re-export Flight is required'); return; }
+          if (!editingRecord.reexportDestination) { alert('Destination is required'); return; }
+          if (!editingRecord.reexportDate) { alert('Re-export Date is required'); return; }
+        }
+      } else if (editingRecord.customsStatus === 'Cleared') {
+        if (!editingRecord.disposition || editingRecord.disposition === 'Pending') {
+          alert('Disposition is required');
           return;
         }
-        if (editingClearedAction === 'domesticForwarding' && !editingRecord.domesticForwarding) {
-          alert('Forward Via is required');
-          return;
+
+        if (editingRecord.disposition === 'Delivered') {
+          if (!editingRecord.deliveryAgent) { alert('Delivery Agent is required'); return; }
+          if (!editingRecord.deliveryDateTime) { alert('Delivery Date & Time is required'); return; }
         }
-      } else if (editingRecord.protocol === 'Non-Cleared / Other') {
-        if (!editingNonClearedAction) {
-          alert('Non-Cleared / Other Action is required');
-          return;
-        }
-        if (editingNonClearedAction === 'arrivalBelt' && !editingRecord.arrivalBelt) {
-          alert('Arrival Belt is required');
-          return;
-        }
-        if (editingNonClearedAction === 'handover' && !editingRecord.handoverOption) {
-          alert('Handover option is required');
-          return;
-        }
-        if (editingNonClearedAction === 'warehouse' && !editingRecord.warehouseOption) {
-          alert('Warehouse option is required');
-          return;
-        }
-        if (editingNonClearedAction === 'reexport' && !editingRecord.reexportOption) {
-          alert('Re-export option is required');
-          return;
+        if (editingRecord.disposition === 'Forwarded') {
+          if (!editingRecord.domesticForwarding) { alert('Forward Via is required'); return; }
+          if (!editingRecord.forwardingFlightNo) { alert('Forwarding Flight Number is required'); return; }
+          if (!editingRecord.forwardingDate) { alert('Forwarding Date is required'); return; }
+          if (!editingRecord.forwardingDestination) { alert('Destination is required'); return; }
         }
       }
     }
 
     const getLegacyFieldsFromProtocol = (
-      record: BaggageRecord,
-      clearedAction: string,
-      nonClearedAction: string
+      record: BaggageRecord
     ) => {
       if (record.registryType === 'Departure') {
         return {
@@ -1346,67 +1368,36 @@ export default function RushBaggageWizard() {
         };
       }
 
-      if (!record.protocol) {
-        return {
-          status: 'Expected' as const,
-          customsStatus: 'Pending' as const,
-          disposition: 'Pending' as const,
-          dispositionLocation: '' as any
-        };
+      // Arrival Redesign Mapping
+      let dispositionLocation: any = '';
+      if (record.disposition === 'Delivered') {
+        dispositionLocation = record.deliveryAgent || 'VVM';
+      } else if (record.disposition === 'Storage') {
+        dispositionLocation = 'LHG Office';
+      } else if (record.disposition === 'Forwarded') {
+        const df = record.domesticForwarding || 'Air India';
+        dispositionLocation = df === 'IndiGo' ? 'Indigo' : df === 'SpiceJet' ? 'Spice Jet' : 'Air India';
+      } else if (record.disposition === 'Belt 9') {
+        dispositionLocation = 'Belt 9';
+      } else if (record.disposition === 'Handover') {
+        dispositionLocation = record.handoverAirline || 'Other Airline';
+      } else if (record.disposition === 'CWC') {
+        dispositionLocation = 'CWC';
+      } else if (record.disposition === 'Re-export') {
+        dispositionLocation = 'Hub Re-export';
       }
 
-      if (record.protocol === 'Cleared Baggage') {
-        let disposition: any = 'Pending';
-        let dispositionLocation: any = '';
-
-        if (clearedAction === 'deliveryAgent') {
-          disposition = 'Delivered';
-          dispositionLocation = record.deliveryAgent || 'VVM';
-        } else if (clearedAction === 'storage') {
-          disposition = 'Storage';
-          dispositionLocation = 'LHG Office';
-        } else if (clearedAction === 'domesticForwarding') {
-          disposition = 'Forwarded';
-          const df = record.domesticForwarding || 'Air India';
-          dispositionLocation = df === 'IndiGo' ? 'Indigo' : df === 'SpiceJet' ? 'Spice Jet' : 'Air India';
-        }
-
-        return {
-          status: 'Received' as const,
-          customsStatus: 'Cleared' as const,
-          disposition,
-          dispositionLocation
-        };
-      } else {
-        let disposition: any = 'Pending';
-        let dispositionLocation: any = '';
-
-        if (nonClearedAction === 'arrivalBelt') {
-          disposition = 'Belt 9';
-          dispositionLocation = 'Belt 9';
-        } else if (nonClearedAction === 'handover') {
-          disposition = 'Handover';
-          dispositionLocation = 'Other Airline';
-        } else if (nonClearedAction === 'warehouse') {
-          disposition = 'CWC';
-          dispositionLocation = 'CWC';
-        } else if (nonClearedAction === 'reexport') {
-          disposition = 'Re-export';
-          dispositionLocation = 'Hub Re-export';
-        }
-
-        return {
-          status: 'Received' as const,
-          customsStatus: 'Not Cleared' as const,
-          disposition,
-          dispositionLocation
-        };
-      }
+      return {
+        status: 'Received' as const,
+        customsStatus: record.customsStatus,
+        disposition: record.disposition,
+        dispositionLocation
+      };
     };
 
     const updatedList = baggageList.map(item => {
       if (item.id === editingRecord.id) {
-        const legacyFields = getLegacyFieldsFromProtocol(editingRecord, editingClearedAction, editingNonClearedAction);
+        const legacyFields = getLegacyFieldsFromProtocol(editingRecord);
 
         const wasReceived = item.status === 'Received';
         const isReceived = legacyFields.status === 'Received';
@@ -1426,17 +1417,26 @@ export default function RushBaggageWizard() {
         return {
           ...editingRecord,
           ...legacyFields,
-          deliveryAgent: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'deliveryAgent') ? editingRecord.deliveryAgent as any : undefined,
-          storageOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'storage') ? editingRecord.storageOption as any : undefined,
-          domesticForwarding: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'domesticForwarding') ? editingRecord.domesticForwarding as any : undefined,
-          arrivalBelt: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'arrivalBelt') ? editingRecord.arrivalBelt as any : undefined,
-          handoverOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'handover') ? editingRecord.handoverOption as any : undefined,
-          warehouseOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'warehouse') ? editingRecord.warehouseOption as any : undefined,
-          reexportOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'reexport') ? editingRecord.reexportOption as any : undefined,
+          // Clear irrelevant fields for storage efficiency and data consistency
+          protocol: editingRecord.registryType === 'Arrival' ? (editingRecord.customsStatus === 'Cleared' ? 'Cleared Baggage' : 'Non-Cleared / Other') : undefined,
+          deliveryAgent: editingRecord.disposition === 'Delivered' ? editingRecord.deliveryAgent : undefined,
+          deliveryDateTime: editingRecord.disposition === 'Delivered' ? editingRecord.deliveryDateTime : undefined,
+          domesticForwarding: editingRecord.disposition === 'Forwarded' ? editingRecord.domesticForwarding : undefined,
+          forwardingFlightNo: (editingRecord.disposition === 'Forwarded' || editingRecord.registryType === 'Departure') ? editingRecord.forwardingFlightNo : undefined,
+          forwardingDate: (editingRecord.disposition === 'Forwarded' || editingRecord.registryType === 'Departure') ? editingRecord.forwardingDate : undefined,
+          forwardingDestination: (editingRecord.disposition === 'Forwarded' || editingRecord.registryType === 'Departure') ? editingRecord.forwardingDestination : undefined,
+          arrivalBelt: editingRecord.disposition === 'Belt 9' ? 'Arrival Belt 9' : undefined,
+          handoverAirline: editingRecord.disposition === 'Handover' ? editingRecord.handoverAirline : undefined,
+          handoverDateTime: editingRecord.disposition === 'Handover' ? editingRecord.handoverDateTime : undefined,
+          warehouseReference: editingRecord.disposition === 'CWC' ? editingRecord.warehouseReference : undefined,
+          reexportFlight: editingRecord.disposition === 'Re-export' ? editingRecord.reexportFlight : undefined,
+          reexportDestination: editingRecord.disposition === 'Re-export' ? editingRecord.reexportDestination : undefined,
+          reexportDate: editingRecord.disposition === 'Re-export' ? editingRecord.reexportDate : undefined,
+          preventiveReason: (editingRecord.customsStatus === 'Not Cleared' || editingRecord.customsStatus === 'Marked Preventive') ? editingRecord.preventiveReason : undefined,
           receivedAt,
           dispositionUpdatedAt,
           customsUpdatedAt: item.customsStatus !== legacyFields.customsStatus ? new Date().toISOString() : item.customsUpdatedAt
-        };
+        } as BaggageRecord;
       }
       return item;
     });
@@ -1452,41 +1452,58 @@ export default function RushBaggageWizard() {
 
     const updatedList = baggageList.map(item => {
       if (selectedIds.includes(item.id)) {
-        // Only modify if received or setting received status
-        const isReceived = item.status === 'Received';
-        
+        // Redesigned Bulk Update Mapping
         const updatedCustomsStatus = bulkCustomsStatus;
-        const updatedCustomsReason = bulkCustomsStatus === 'Not Cleared' ? bulkCustomsReason : '';
-        
-        // Match disposition based on clearance
-        let updatedDisposition = bulkDisposition;
-        let updatedLocation = bulkLocation;
+        const updatedDisposition = bulkDisposition;
 
-        // Ensure real operational constraints
-        if (updatedCustomsStatus === 'Cleared') {
-          // Cleared bags should not stay in Belt 9, CWC or Re-export default
-          if (updatedLocation === 'Belt 9' || updatedLocation === 'CWC') {
-            updatedLocation = 'LHG Office'; // Fallback
-          }
-        } else if (updatedCustomsStatus === 'Not Cleared' || updatedCustomsStatus === 'Marked Preventive') {
-          // Non cleared cannot be delivered to standard clients or forwarded
-          if (['VVM', 'Outlook', 'Advik', 'Air India', 'Indigo', 'Spice Jet'].includes(updatedLocation || '')) {
-            updatedLocation = 'Belt 9'; // Fallback
-          }
+        let updatedLocation: any = '';
+        if (updatedDisposition === 'Delivered') {
+          updatedLocation = bulkLocation || 'VVM';
+        } else if (updatedDisposition === 'Storage') {
+          updatedLocation = 'LHG Office';
+        } else if (updatedDisposition === 'Forwarded') {
+          const df = bulkDomesticForwarding || 'Air India';
+          updatedLocation = df === 'IndiGo' ? 'Indigo' : df === 'SpiceJet' ? 'Spice Jet' : 'Air India';
+        } else if (updatedDisposition === 'Belt 9') {
+          updatedLocation = 'Belt 9';
+        } else if (updatedDisposition === 'Handover') {
+          updatedLocation = bulkHandoverAirline || 'Other Airline';
+        } else if (updatedDisposition === 'CWC') {
+          updatedLocation = 'CWC';
+        } else if (updatedDisposition === 'Re-export') {
+          updatedLocation = 'Hub Re-export';
         }
+
+        const legacyProtocol = updatedCustomsStatus === 'Cleared' ? 'Cleared Baggage' : 'Non-Cleared / Other';
 
         return {
           ...item,
           customsStatus: updatedCustomsStatus,
-          customsReason: updatedCustomsReason as BaggageRecord['customsReason'],
           customsUpdatedAt: new Date().toISOString(),
           disposition: updatedDisposition,
           dispositionLocation: updatedLocation,
           dispositionUpdatedAt: new Date().toISOString(),
-          // If bulk editing disposition, ensure marked received
           status: 'Received' as const,
-          receivedAt: item.receivedAt || new Date().toISOString()
-        };
+          receivedAt: item.receivedAt || new Date().toISOString(),
+          // Storage efficiency: clear irrelevant fields
+          protocol: (item.registryType === 'Arrival' ? legacyProtocol : undefined) as any,
+          preventiveReason: (updatedCustomsStatus === 'Not Cleared' || updatedCustomsStatus === 'Marked Preventive') ? bulkPreventiveReason : undefined,
+          deliveryAgent: updatedDisposition === 'Delivered' ? (bulkLocation as any) : undefined,
+          deliveryDateTime: updatedDisposition === 'Delivered' ? bulkDeliveryDateTime : undefined,
+          domesticForwarding: updatedDisposition === 'Forwarded' ? bulkDomesticForwarding : undefined,
+          forwardingFlightNo: (updatedDisposition === 'Forwarded' || item.registryType === 'Departure') ? bulkForwardingFlightNo : undefined,
+          forwardingDate: (updatedDisposition === 'Forwarded' || item.registryType === 'Departure') ? bulkForwardingDateNew : undefined,
+          forwardingDestination: (updatedDisposition === 'Forwarded' || item.registryType === 'Departure') ? bulkForwardingDestinationNew : undefined,
+          arrivalBelt: updatedDisposition === 'Belt 9' ? 'Arrival Belt 9' : undefined,
+          handoverAirline: updatedDisposition === 'Handover' ? bulkHandoverAirline : undefined,
+          handoverDateTime: updatedDisposition === 'Handover' ? bulkHandoverDateTime : undefined,
+          warehouseReference: updatedDisposition === 'CWC' ? bulkWarehouseReference : undefined,
+          reexportFlight: updatedDisposition === 'Re-export' ? bulkReexportFlight : undefined,
+          reexportDestination: updatedDisposition === 'Re-export' ? bulkReexportDestination : undefined,
+          reexportDate: updatedDisposition === 'Re-export' ? bulkReexportDate : undefined,
+          storageRemarks: (updatedDisposition === 'Storage' || updatedDisposition === 'CWC') ? bulkStorageRemarks : undefined,
+          remarks: bulkRemarks || item.remarks
+        } as BaggageRecord;
       }
       return item;
     });
@@ -5796,260 +5813,420 @@ export default function RushBaggageWizard() {
                   </div>
                 </div>
               ) : (
-                /* Arrival Specific Edit Workflow (Original Protocol & Status fields) */
+                /* Redesigned Arrival Specific Edit Workflow */
                 <>
-                  {/* Protocol selector */}
-                  <div className="space-y-1.5 bg-slate-950/20 p-3 rounded-lg border border-slate-800/60">
-                    <label className="text-[10px] font-bold text-indigo-400 uppercase block">Dispositions & Customs Operations Protocol *</label>
+                <div className="space-y-6">
+                  {/* Step 1: Customs Status */}
+                  <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                    <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 1: Customs Status *</label>
                     <select
                       required
-                      value={editingRecord.protocol || ''}
+                      value={editingRecord.customsStatus === 'Cleared' ? 'Cleared' : (editingRecord.customsStatus === 'Not Cleared' || editingRecord.customsStatus === 'Marked Preventive' ? 'Not Cleared / Marked Preventive' : '')}
                       onChange={(e) => {
-                        const nextProtocol = e.target.value as any;
-                        setEditingClearedAction('');
-                        setEditingNonClearedAction('');
+                        const val = e.target.value;
                         setEditingRecord({
                           ...editingRecord,
-                          protocol: nextProtocol,
-                          deliveryAgent: undefined,
-                          storageOption: undefined,
-                          domesticForwarding: undefined,
+                          customsStatus: val === 'Cleared' ? 'Cleared' : 'Not Cleared',
+                          // Reset subsequent fields
+                          preventiveReason: '',
+                          disposition: 'Pending',
                           arrivalBelt: undefined,
-                          handoverOption: undefined,
-                          warehouseOption: undefined,
-                          reexportOption: undefined
+                          handoverAirline: '',
+                          handoverDateTime: '',
+                          warehouseReference: '',
+                          storageRemarks: '',
+                          reexportFlight: '',
+                          reexportDestination: '',
+                          reexportDate: '',
+                          deliveryAgent: undefined,
+                          deliveryDateTime: '',
+                          domesticForwarding: undefined,
+                          forwardingFlightNo: '',
+                          forwardingDate: '',
+                          forwardingDestination: '',
                         });
                       }}
-                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                     >
-                      <option value="">-- Choose Protocol --</option>
-                      <option value="Cleared Baggage">Cleared Baggage</option>
-                      <option value="Non-Cleared / Other">Non-Cleared / Other</option>
+                      <option value="">-- Select Status --</option>
+                      <option value="Cleared">Cleared</option>
+                      <option value="Not Cleared / Marked Preventive">Not Cleared / Marked Preventive</option>
                     </select>
                   </div>
 
-                  {/* Dynamic Sub-options */}
-                  <AnimatePresence initial={false}>
-                    {editingRecord.protocol && (
+                  <AnimatePresence mode="wait">
+                    {/* Step 2 for Not Cleared */}
+                    {(editingRecord.customsStatus === 'Not Cleared' || editingRecord.customsStatus === 'Marked Preventive') && (
                       <motion.div
-                        key={editingRecord.protocol}
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="space-y-4"
                       >
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide">
-                          {editingRecord.protocol} Sub-options
-                        </p>
+                        <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 2: Preventive Reason *</label>
+                          <textarea
+                            required
+                            rows={2}
+                            placeholder="e.g. Customs hold, Security examination, etc."
+                            value={editingRecord.preventiveReason || ''}
+                            onChange={(e) => setEditingRecord({ ...editingRecord, preventiveReason: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                          />
+                        </div>
 
-                        {editingRecord.protocol === 'Cleared Baggage' ? (
-                          <div className="space-y-4">
-                            {/* Level 2: Master dropdown for Cleared Baggage Action */}
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action Options *</label>
+                        {editingRecord.preventiveReason && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="space-y-4"
+                          >
+                            <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                              <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 3: Disposition *</label>
                               <select
                                 required
-                                value={editingClearedAction}
+                                value={editingRecord.disposition || ''}
                                 onChange={(e) => {
-                                  const act = e.target.value;
-                                  setEditingClearedAction(act);
-                                  setEditingRecord(prev => prev ? ({
-                                    ...prev,
-                                    deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
-                                    storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
-                                    domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
-                                  }) : null);
+                                  const disp = e.target.value as any;
+                                  setEditingRecord({
+                                    ...editingRecord,
+                                    disposition: disp,
+                                    // Reset sub-fields
+                                    arrivalBelt: undefined,
+                                    handoverAirline: '',
+                                    handoverDateTime: disp === 'Handover' ? new Date().toISOString().slice(0, 16) : '',
+                                    warehouseReference: '',
+                                    storageRemarks: '',
+                                    reexportFlight: '',
+                                    reexportDestination: '',
+                                    reexportDate: '',
+                                  });
                                 }}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                               >
-                                <option value="">-- Select Cleared Baggage Action --</option>
-                                <option value="deliveryAgent">Delivery Agent</option>
-                                <option value="storage">Storage</option>
-                                <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                                <option value="">-- Select Disposition --</option>
+                                <option value="Belt 9">Arrival Belt 9</option>
+                                <option value="Handover">Handed Over to OAL (Other Airline)</option>
+                                <option value="CWC">CWC Warehouse</option>
+                                <option value="Re-export">Re-export</option>
                               </select>
                             </div>
 
-                            <AnimatePresence initial={false}>
-                              {editingClearedAction === 'deliveryAgent' && (
+                            {/* Dynamic Disposition Fields for Not Cleared */}
+                            <AnimatePresence mode="wait">
+                              {editingRecord.disposition === 'Belt 9' && (
                                 <motion.div
+                                  key="belt9"
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
                                   exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
+                                  className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
                                 >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.deliveryAgent || 'VVM'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, deliveryAgent: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="VVM">VVM</option>
-                                    <option value="Outlook">Outlook</option>
-                                    <option value="Advik">Advik</option>
-                                  </select>
+                                  <label className="text-[10px] font-bold text-indigo-400 uppercase block">Remarks (Optional)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="Lounge holding area..."
+                                    value={editingRecord.remarks || ''}
+                                    onChange={(e) => setEditingRecord({ ...editingRecord, remarks: e.target.value })}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                  />
                                 </motion.div>
                               )}
 
-                              {editingClearedAction === 'storage' && (
+                              {editingRecord.disposition === 'Handover' && (
                                 <motion.div
+                                  key="handover"
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
                                   exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
+                                  className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
                                 >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.storageOption || 'Standard Warehousing – LHG Office'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, storageOption: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
-                                  </select>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Partner Airline *</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      placeholder="Air India, Emirates, etc."
+                                      value={editingRecord.handoverAirline || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, handoverAirline: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Handover Date & Time *</label>
+                                    <input
+                                      type="datetime-local"
+                                      required
+                                      value={editingRecord.handoverDateTime || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, handoverDateTime: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
                                 </motion.div>
                               )}
 
-                              {editingClearedAction === 'domesticForwarding' && (
+                              {editingRecord.disposition === 'CWC' && (
                                 <motion.div
+                                  key="cwc"
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
                                   exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
+                                  className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
                                 >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.domesticForwarding || 'Air India'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, domesticForwarding: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="Air India">Air India</option>
-                                    <option value="IndiGo">IndiGo</option>
-                                    <option value="SpiceJet">SpiceJet</option>
-                                  </select>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Warehouse Reference *</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      placeholder="Ref #12345"
+                                      value={editingRecord.warehouseReference || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, warehouseReference: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Storage Remarks (Optional)</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Central depot storage..."
+                                      value={editingRecord.storageRemarks || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, storageRemarks: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                </motion.div>
+                              )}
+
+                              {editingRecord.disposition === 'Re-export' && (
+                                <motion.div
+                                  key="reexport"
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  className="grid grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                                >
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Re-export Flight *</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      placeholder="LH761"
+                                      value={editingRecord.reexportFlight || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, reexportFlight: e.target.value.toUpperCase() })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Destination *</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      placeholder="FRA"
+                                      value={editingRecord.reexportDestination || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, reexportDestination: e.target.value.toUpperCase() })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                  <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Re-export Date *</label>
+                                    <input
+                                      type="date"
+                                      required
+                                      value={editingRecord.reexportDate || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, reexportDate: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
+                                  <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Remarks</label>
+                                    <input
+                                      type="text"
+                                      placeholder="Repatriation details..."
+                                      value={editingRecord.remarks || ''}
+                                      onChange={(e) => setEditingRecord({ ...editingRecord, remarks: e.target.value })}
+                                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                    />
+                                  </div>
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action Options *</label>
-                              <select
-                                required
-                                value={editingNonClearedAction}
-                                onChange={(e) => {
-                                  const act = e.target.value;
-                                  setEditingNonClearedAction(act);
-                                  setEditingRecord(prev => prev ? ({
-                                    ...prev,
-                                    arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
-                                    handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
-                                    warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
-                                    reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
-                                  }) : null);
-                                }}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                              >
-                                <option value="">-- Select Non-Cleared / Other Action --</option>
-                                <option value="arrivalBelt">Arrival Belt</option>
-                                <option value="handover">Handover</option>
-                                <option value="warehouse">Warehouse</option>
-                                <option value="reexport">Re-export</option>
-                              </select>
-                            </div>
-
-                            <AnimatePresence initial={false}>
-                              {editingNonClearedAction === 'arrivalBelt' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.arrivalBelt || 'Arrival Belt 9'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, arrivalBelt: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="Arrival Belt 9">Belt 9</option>
-                                  </select>
-                                </motion.div>
-                              )}
-
-                              {editingNonClearedAction === 'handover' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.handoverOption || 'Partner Airlines'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, handoverOption: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="Partner Airlines">Partner Airlines</option>
-                                  </select>
-                                </motion.div>
-                              )}
-
-                              {editingNonClearedAction === 'warehouse' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.warehouseOption || 'CWC Warehouse'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, warehouseOption: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="CWC Warehouse">CWC Warehouse</option>
-                                  </select>
-                                </motion.div>
-                              )}
-
-                              {editingNonClearedAction === 'reexport' && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="space-y-1 overflow-hidden"
-                                >
-                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
-                                  <select
-                                    required
-                                    value={editingRecord.reexportOption || 'Re-export to Carrier Hub'}
-                                    onChange={(e) => setEditingRecord({...editingRecord, reexportOption: e.target.value as any})}
-                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                                  >
-                                    <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
-                                  </select>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
+                          </motion.div>
                         )}
                       </motion.div>
                     )}
+
+                    {/* Step 2 for Cleared */}
+                    {editingRecord.customsStatus === 'Cleared' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="space-y-4"
+                      >
+                        <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 2: Disposition *</label>
+                          <select
+                            required
+                            value={editingRecord.disposition || ''}
+                            onChange={(e) => {
+                              const disp = e.target.value as any;
+                              setEditingRecord({
+                                ...editingRecord,
+                                disposition: disp,
+                                // Reset sub-fields
+                                deliveryAgent: disp === 'Delivered' ? 'VVM' : undefined,
+                                deliveryDateTime: disp === 'Delivered' ? new Date().toISOString().slice(0, 16) : '',
+                                domesticForwarding: disp === 'Forwarded' ? 'Air India' : undefined,
+                                storageRemarks: '',
+                                forwardingFlightNo: '',
+                                forwardingDate: '',
+                                forwardingDestination: '',
+                              });
+                            }}
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                          >
+                            <option value="">-- Select Disposition --</option>
+                            <option value="Delivered">Delivery Agent</option>
+                            <option value="Storage">LHG Office</option>
+                            <option value="Forwarded">Domestic Forwarding</option>
+                          </select>
+                        </div>
+
+                        {/* Dynamic Disposition Fields for Cleared */}
+                        <AnimatePresence mode="wait">
+                          {editingRecord.disposition === 'Delivered' && (
+                            <motion.div
+                              key="delivered"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Delivery Agent *</label>
+                                <select
+                                  required
+                                  value={editingRecord.deliveryAgent || 'VVM'}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, deliveryAgent: e.target.value as any })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                >
+                                  <option value="VVM">VVM</option>
+                                  <option value="Outlook">Outlook</option>
+                                  <option value="Advik">Advik</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Delivery Date & Time *</label>
+                                <input
+                                  type="datetime-local"
+                                  required
+                                  value={editingRecord.deliveryDateTime || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, deliveryDateTime: e.target.value })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Remarks (Optional)</label>
+                                <input
+                                  type="text"
+                                  placeholder="Direct dispatch details..."
+                                  value={editingRecord.remarks || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, remarks: e.target.value })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {editingRecord.disposition === 'Storage' && (
+                            <motion.div
+                              key="storage"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <label className="text-[10px] font-bold text-indigo-400 uppercase block">Storage Remarks (Optional)</label>
+                              <input
+                                type="text"
+                                placeholder="LHG Office storage details..."
+                                value={editingRecord.storageRemarks || ''}
+                                onChange={(e) => setEditingRecord({ ...editingRecord, storageRemarks: e.target.value })}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                              />
+                            </motion.div>
+                          )}
+
+                          {editingRecord.disposition === 'Forwarded' && (
+                            <motion.div
+                              key="forwarded"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="grid grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Forward Via *</label>
+                                <select
+                                  required
+                                  value={editingRecord.domesticForwarding || 'Air India'}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, domesticForwarding: e.target.value as any })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                >
+                                  <option value="Air India">Air India</option>
+                                  <option value="SpiceJet">SpiceJet</option>
+                                  <option value="IndiGo">IndiGo</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Forwarding Flight Number *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="AI808"
+                                  value={editingRecord.forwardingFlightNo || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, forwardingFlightNo: e.target.value.toUpperCase() })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Forwarding Date *</label>
+                                <input
+                                  type="date"
+                                  required
+                                  value={editingRecord.forwardingDate || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, forwardingDate: e.target.value })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Destination *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="BOM"
+                                  value={editingRecord.forwardingDestination || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, forwardingDestination: e.target.value.toUpperCase() })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Remarks</label>
+                                <input
+                                  type="text"
+                                  placeholder="Domestic connection details..."
+                                  value={editingRecord.remarks || ''}
+                                  onChange={(e) => setEditingRecord({ ...editingRecord, remarks: e.target.value })}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    )}
                   </AnimatePresence>
+                </div>
 
                   {/* Storage Location Remarks (requested feature) */}
                   <div className="space-y-1.5">
@@ -6163,96 +6340,354 @@ export default function RushBaggageWizard() {
               </button>
             </div>
 
-            <form onSubmit={handleBulkEditSubmit} className="p-6 space-y-4">
-              <p className="text-xs text-indigo-300 bg-indigo-950/20 p-3 border border-indigo-900/30 rounded">
-                This operation will update <strong>{selectedIds.length} selected baggage records</strong>, automatically mark them as <strong>Received (Arrived)</strong> and update their customs and physical location routing parameters.
+            <form onSubmit={handleBulkEditSubmit} className="p-6 space-y-4 overflow-y-auto" style={{ maxHeight: '75vh' }}>
+              <p className="text-[10px] text-indigo-300 bg-indigo-950/20 p-3 border border-indigo-900/30 rounded uppercase tracking-widest font-bold">
+                Bulk Update: {selectedIds.length} Records Selected
               </p>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Set Customs Status</label>
-                  <select
-                    value={bulkCustomsStatus}
-                    onChange={(e) => setBulkCustomsStatus(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                  >
-                    <option value="Pending">Pending Queue</option>
-                    <option value="Cleared">Cleared</option>
-                    <option value="Not Cleared">Not Cleared (Held)</option>
-                    <option value="Marked Preventive">Marked Preventive (Severe Hold)</option>
-                  </select>
-                </div>
+              {/* Step 1: Customs Status */}
+              <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 1: Set Customs Status *</label>
+                <select
+                  required
+                  value={bulkCustomsStatus === 'Cleared' ? 'Cleared' : (bulkCustomsStatus === 'Not Cleared' || bulkCustomsStatus === 'Marked Preventive' ? 'Not Cleared / Marked Preventive' : '')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBulkCustomsStatus(val === 'Cleared' ? 'Cleared' : 'Not Cleared');
+                    // Reset subsequent fields
+                    setBulkPreventiveReason('');
+                    setBulkDisposition('Pending');
+                  }}
+                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                >
+                  <option value="">-- Select Status --</option>
+                  <option value="Cleared">Cleared</option>
+                  <option value="Not Cleared / Marked Preventive">Not Cleared / Marked Preventive</option>
+                </select>
+              </div>
 
+              <AnimatePresence mode="wait">
+                {/* Step 2 for Not Cleared */}
                 {(bulkCustomsStatus === 'Not Cleared' || bulkCustomsStatus === 'Marked Preventive') && (
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase">Hold Reason</label>
-                    <select
-                      value={bulkCustomsReason}
-                      onChange={(e) => setBulkCustomsReason(e.target.value as any)}
-                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                    >
-                      <option value="Lack of documents">Lack of documents</option>
-                      <option value="Awaiting documents">Awaiting documents</option>
-                      <option value="Refused">Refused</option>
-                      <option value="Deferred">Deferred</option>
-                      <option value="Preventive">Preventive</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Set Disposition Action</label>
-                  <select
-                    value={bulkDisposition}
-                    onChange={(e) => setBulkDisposition(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-4"
                   >
-                    <option value="Pending">Pending</option>
-                    <option value="Storage">Storage/Warehousing</option>
-                    <option value="Delivered">Delivered</option>
-                    <option value="Forwarded">Forwarded</option>
-                    <option value="Belt 9">Belt 9</option>
-                    <option value="Handover">Handover</option>
-                    <option value="CWC">CWC</option>
-                    <option value="Re-export">Re-export</option>
-                  </select>
-                </div>
+                    <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                      <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 2: Preventive Reason *</label>
+                      <textarea
+                        required
+                        rows={2}
+                        placeholder="e.g. Customs hold, Security examination, etc."
+                        value={bulkPreventiveReason}
+                        onChange={(e) => setBulkPreventiveReason(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                      />
+                    </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Set Storage / Client Location</label>
-                  {bulkCustomsStatus === 'Cleared' ? (
-                    <select
-                      value={bulkLocation}
-                      onChange={(e) => setBulkLocation(e.target.value as any)}
-                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded text-emerald-400 font-semibold"
-                    >
-                      <option value="LHG Office">LHG Office</option>
-                      <option value="BMA">BMA</option>
-                      <option value="Level 4 Checks">Level 4 Checks</option>
-                      <option value="VVM">VVM Delivery Agent</option>
-                      <option value="Outlook">Outlook Messenger</option>
-                      <option value="Advik">Advik Cargo</option>
-                      <option value="Air India">Air India Link</option>
-                      <option value="Indigo">Indigo connect</option>
-                      <option value="Spice Jet">Spice Jet connect</option>
-                    </select>
-                  ) : (
-                    <select
-                      value={bulkLocation}
-                      onChange={(e) => setBulkLocation(e.target.value as any)}
-                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded text-red-400 font-semibold"
-                    >
-                      <option value="Belt 9">Arrival Belt 9</option>
-                      <option value="CWC">CWC Warehouse Depot</option>
-                      <option value="Hub Re-export">Re-export Hub Cargo</option>
-                      <option value="Other Airline">Handover other airlines</option>
-                      <option value="LHG Office">LHG Office</option>
-                    </select>
-                  )}
-                </div>
-              </div>
+                    {bulkPreventiveReason && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="space-y-4"
+                      >
+                        <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 3: Disposition *</label>
+                          <select
+                            required
+                            value={bulkDisposition}
+                            onChange={(e) => {
+                              const disp = e.target.value as any;
+                              setBulkDisposition(disp);
+                              if (disp === 'Handover') setBulkHandoverDateTime(new Date().toISOString().slice(0, 16));
+                            }}
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                          >
+                            <option value="Pending">-- Select Disposition --</option>
+                            <option value="Belt 9">Arrival Belt 9</option>
+                            <option value="Handover">Handed Over to OAL (Other Airline)</option>
+                            <option value="CWC">CWC Warehouse</option>
+                            <option value="Re-export">Re-export</option>
+                          </select>
+                        </div>
+
+                        {/* Dynamic Disposition Fields for Not Cleared */}
+                        <AnimatePresence mode="wait">
+                          {bulkDisposition === 'Belt 9' && (
+                            <motion.div
+                              key="bulkBelt9"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <label className="text-[10px] font-bold text-indigo-400 uppercase block">Remarks (Optional)</label>
+                              <input
+                                type="text"
+                                placeholder="Lounge holding area..."
+                                value={bulkRemarks}
+                                onChange={(e) => setBulkRemarks(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                              />
+                            </motion.div>
+                          )}
+
+                          {bulkDisposition === 'Handover' && (
+                            <motion.div
+                              key="bulkHandover"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Partner Airline *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="Air India, Emirates, etc."
+                                  value={bulkHandoverAirline}
+                                  onChange={(e) => setBulkHandoverAirline(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Handover Date & Time *</label>
+                                <input
+                                  type="datetime-local"
+                                  required
+                                  value={bulkHandoverDateTime}
+                                  onChange={(e) => setBulkHandoverDateTime(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {bulkDisposition === 'CWC' && (
+                            <motion.div
+                              key="bulkCwc"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Warehouse Reference *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="Ref #12345"
+                                  value={bulkWarehouseReference}
+                                  onChange={(e) => setBulkWarehouseReference(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Storage Remarks (Optional)</label>
+                                <input
+                                  type="text"
+                                  placeholder="Central depot storage..."
+                                  value={bulkStorageRemarks}
+                                  onChange={(e) => setBulkStorageRemarks(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {bulkDisposition === 'Re-export' && (
+                            <motion.div
+                              key="bulkReexport"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="grid grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                            >
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Re-export Flight *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="LH761"
+                                  value={bulkReexportFlight}
+                                  onChange={(e) => setBulkReexportFlight(e.target.value.toUpperCase())}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Destination *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="FRA"
+                                  value={bulkReexportDestination}
+                                  onChange={(e) => setBulkReexportDestination(e.target.value.toUpperCase())}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Re-export Date *</label>
+                                <input
+                                  type="date"
+                                  required
+                                  value={bulkReexportDate}
+                                  onChange={(e) => setBulkReexportDate(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                                />
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    )}
+                  </motion.div>
+                )}
+
+                {/* Step 2 for Cleared */}
+                {bulkCustomsStatus === 'Cleared' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-4"
+                  >
+                    <div className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80">
+                      <label className="text-[10px] font-bold text-indigo-400 uppercase block tracking-wider">Step 2: Disposition *</label>
+                      <select
+                        required
+                        value={bulkDisposition}
+                        onChange={(e) => {
+                          const disp = e.target.value as any;
+                          setBulkDisposition(disp);
+                          if (disp === 'Delivered') setBulkDeliveryDateTime(new Date().toISOString().slice(0, 16));
+                          if (disp === 'Forwarded') setBulkDomesticForwarding('Air India');
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm py-2 px-3 rounded-lg cursor-pointer font-semibold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                      >
+                        <option value="Pending">-- Select Disposition --</option>
+                        <option value="Delivered">Delivery Agent</option>
+                        <option value="Storage">LHG Office</option>
+                        <option value="Forwarded">Domestic Forwarding</option>
+                      </select>
+                    </div>
+
+                    {/* Dynamic Disposition Fields for Cleared */}
+                    <AnimatePresence mode="wait">
+                      {bulkDisposition === 'Delivered' && (
+                        <motion.div
+                          key="bulkDelivered"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="space-y-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                        >
+                          <div>
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Delivery Agent *</label>
+                            <select
+                              required
+                              value={bulkLocation}
+                              onChange={(e) => setBulkLocation(e.target.value as any)}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            >
+                              <option value="VVM">VVM</option>
+                              <option value="Outlook">Outlook</option>
+                              <option value="Advik">Advik</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Delivery Date & Time *</label>
+                            <input
+                              type="datetime-local"
+                              required
+                              value={bulkDeliveryDateTime}
+                              onChange={(e) => setBulkDeliveryDateTime(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {bulkDisposition === 'Storage' && (
+                        <motion.div
+                          key="bulkStorage"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="space-y-1.5 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                        >
+                          <label className="text-[10px] font-bold text-indigo-400 uppercase block">Storage Remarks (Optional)</label>
+                          <input
+                            type="text"
+                            placeholder="LHG Office storage details..."
+                            value={bulkStorageRemarks}
+                            onChange={(e) => setBulkStorageRemarks(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                          />
+                        </motion.div>
+                      )}
+
+                      {bulkDisposition === 'Forwarded' && (
+                        <motion.div
+                          key="bulkForwarded"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="grid grid-cols-2 gap-4 bg-slate-950/40 p-4 rounded-lg border border-slate-800/80"
+                        >
+                          <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Forward Via *</label>
+                            <select
+                              required
+                              value={bulkDomesticForwarding}
+                              onChange={(e) => setBulkDomesticForwarding(e.target.value as any)}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            >
+                              <option value="Air India">Air India</option>
+                              <option value="SpiceJet">SpiceJet</option>
+                              <option value="IndiGo">IndiGo</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Flight Number *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="AI808"
+                              value={bulkForwardingFlightNo}
+                              onChange={(e) => setBulkForwardingFlightNo(e.target.value.toUpperCase())}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Date *</label>
+                            <input
+                              type="date"
+                              required
+                              value={bulkForwardingDateNew}
+                              onChange={(e) => setBulkForwardingDateNew(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Destination *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="BOM"
+                              value={bulkForwardingDestinationNew}
+                              onChange={(e) => setBulkForwardingDestinationNew(e.target.value.toUpperCase())}
+                              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
                 <button
@@ -6266,7 +6701,7 @@ export default function RushBaggageWizard() {
                   type="submit"
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold transition"
                 >
-                  Apply to Selection
+                  Apply to {selectedIds.length} Records
                 </button>
               </div>
             </form>
