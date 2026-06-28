@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Camera, Sparkles, Volume2, Info, CheckCircle2, RotateCcw } from 'lucide-react';
-import { getActiveScanner, BarcodeScannerProvider } from '../lib/scanner';
+import { X, Camera, Sparkles, CheckCircle2, Info, AlertTriangle } from 'lucide-react';
+import { getActiveScanner, IBaggageScanner, ScanResult } from '../lib/scanner';
 
 interface ScannerModalProps {
   isOpen: boolean;
@@ -25,86 +25,85 @@ export default function ScannerModal({
   onFinishContinuous
 }: ScannerModalProps) {
   const [error, setError] = useState<string | null>(null);
-  const [successFlash, setSuccessFlash] = useState<string | null>(null);
+  const [successFlash, setSuccessFlash] = useState<ScanResult | null>(null);
   const [simulatedInput, setSimulatedInput] = useState('');
   const [providerName] = useState(() => getActiveScanner().name);
   const [cameraActive, setCameraActive] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
-  const scannerRef = useRef<BarcodeScannerProvider | null>(null);
+  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'detecting' | 'success'>('idle');
+  const scannerRef = useRef<IBaggageScanner | null>(null);
 
-  const handleScanMatch = React.useCallback((barcode: string) => {
-    const cleanBarcode = barcode.trim().toUpperCase();
-    if (!cleanBarcode) return;
+  const handleScanMatch = React.useCallback((result: ScanResult) => {
+    setSuccessFlash(result);
+    setScanStatus('success');
+    onScanSuccess(result.tagNumber);
 
-    setSuccessFlash(cleanBarcode);
-    onScanSuccess(cleanBarcode);
-
-    // Flash animation trigger
+    // Success flash duration
     setTimeout(() => {
       setSuccessFlash(null);
+      setScanStatus('scanning');
       if (!isContinuous) {
         onClose();
       }
-    }, 1200);
+    }, 1500);
   }, [onScanSuccess, isContinuous, onClose]);
 
   useEffect(() => {
-    if (!isOpen) {
-      if (scannerRef.current) {
-        scannerRef.current.stopScanning().catch(console.error);
-        setCameraActive(false);
-      }
-      return;
-    }
-
-    // Initialize scan
     const provider = getActiveScanner();
     scannerRef.current = provider;
+
+    if (!isOpen) {
+      provider.stopScanning().catch(console.error);
+      return;
+    }
 
     const startCamera = async () => {
       setIsInitializing(true);
       setError(null);
+      setScanStatus('idle');
       try {
         await provider.init();
         await provider.startScanning(
           'scanner-reader-container',
-          (text) => {
-            // Success
-            handleScanMatch(text);
+          (result) => {
+            handleScanMatch(result);
           },
           (err) => {
-            // Scan warning or frame miss (usually safe to ignore unless critical)
+            if (typeof err === 'string' && err.includes('Invalid')) {
+              setError(err);
+              setTimeout(() => setError(null), 3000);
+            }
           }
         );
         setCameraActive(true);
+        setScanStatus('scanning');
       } catch (err: any) {
         console.error('Camera initialization failed', err);
-        setError(
-          'Unable to access the camera stream. This is common in secured iframes. Use the simulation console below to test real scanning logic.'
-        );
+        setError('Unable to access camera. Please check permissions.');
         setCameraActive(false);
       } finally {
         setIsInitializing(false);
       }
     };
 
-    // Delay slightly to ensure element has rendered
-    const timer = setTimeout(() => {
-      startCamera();
-    }, 400);
+    const timer = setTimeout(startCamera, 400);
 
     return () => {
       clearTimeout(timer);
-      if (provider) {
-        provider.stopScanning().catch(console.error);
-      }
+      if (provider) provider.stopScanning().catch(console.error);
     };
   }, [isOpen, handleScanMatch]);
 
   const triggerSimulatedScan = (e: React.FormEvent) => {
     e.preventDefault();
     if (simulatedInput.trim()) {
-      handleScanMatch(simulatedInput.trim());
+      handleScanMatch({
+        tagNumber: simulatedInput.trim().toUpperCase(),
+        barcodeFormat: 'SIMULATED',
+        scannerUsed: 'SIMULATOR',
+        confidenceScore: 1.0,
+        scanTime: 0
+      });
       setSimulatedInput('');
     }
   };
@@ -127,17 +126,46 @@ export default function ScannerModal({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-emerald-500/20 backdrop-blur-xs flex flex-col items-center justify-center z-50 text-center p-6 animate-pulse"
+              className="absolute inset-0 bg-emerald-500/30 backdrop-blur-md flex flex-col items-center justify-center z-50 text-center p-6"
             >
-              <div className="bg-emerald-600 text-white p-4 rounded-full shadow-lg mb-3">
-                <CheckCircle2 className="w-12 h-12" />
+              <motion.div 
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="bg-emerald-600 text-white p-5 rounded-full shadow-2xl mb-4 border-4 border-emerald-400/30"
+              >
+                <CheckCircle2 className="w-16 h-16" />
+              </motion.div>
+              <h2 className="text-white text-3xl font-black font-mono tracking-tighter mb-1 uppercase">
+                Success ✓
+              </h2>
+              <div className="bg-emerald-950/80 border border-emerald-500/40 px-6 py-2 rounded-xl">
+                <p className="text-emerald-100 text-lg font-bold font-mono tracking-widest uppercase">
+                  {successFlash.tagNumber}
+                </p>
               </div>
-              <p className="text-white text-lg font-bold font-mono tracking-wider">
-                {successFlash}
-              </p>
-              <p className="text-emerald-300 text-xs mt-1 uppercase font-semibold tracking-widest">
-                Scanned Successfully
-              </p>
+              <div className="mt-4 flex flex-col gap-1 items-center">
+                <span className="text-emerald-400 text-[10px] uppercase font-bold tracking-widest bg-emerald-900/50 px-3 py-1 rounded-full border border-emerald-500/20">
+                  {successFlash.barcodeFormat} Detected
+                </span>
+                <span className="text-emerald-500/60 text-[9px] font-mono">
+                  Decode: {successFlash.scanTime}ms via {successFlash.scannerUsed}
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Error Overlay (Floating) */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="absolute top-20 left-1/2 -translate-x-1/2 z-[60] bg-red-600 text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-2 text-xs font-bold whitespace-nowrap"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              {error}
             </motion.div>
           )}
         </AnimatePresence>
@@ -145,128 +173,172 @@ export default function ScannerModal({
         {/* Header */}
         <div className="p-4 border-b border-slate-800/80 bg-slate-900/55 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <Camera className="w-5 h-5 text-indigo-400 animate-pulse" />
+            <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
+              <Camera className={`w-4 h-4 text-indigo-400 ${scanStatus === 'scanning' ? 'animate-pulse' : ''}`} />
+            </div>
             <div>
-              <h3 className="font-bold text-slate-200 text-sm">{title}</h3>
-              <p className="text-[10px] text-indigo-300 font-mono">
-                SDK: {providerName} (Swappable Bridge Pattern)
-              </p>
+              <h3 className="font-bold text-slate-200 text-sm tracking-tight">{title}</h3>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-indigo-400 font-mono font-bold uppercase">
+                  IATA-Grade Engine Active
+                </span>
+                <span className="w-1 h-1 rounded-full bg-slate-700" />
+                <span className="text-[9px] text-slate-500 font-mono uppercase">
+                  {providerName}
+                </span>
+              </div>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer"
+            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Camera Scanner Container */}
-        <div className="relative aspect-video w-full bg-slate-950 flex flex-col items-center justify-center overflow-hidden border-b border-slate-800">
-          <div id="scanner-reader-container" className="w-full h-full absolute inset-0 z-10" />
+        {/* Camera Container */}
+        <div className="relative aspect-video w-full bg-slate-950 overflow-hidden border-b border-slate-800 group">
+          <div id="scanner-reader-container" className="w-full h-full absolute inset-0 z-10 grayscale-[0.2]" />
 
-          {/* Holographic Laser Scanner effect overlay */}
+          {/* Reticle & Guidance Overlay */}
           {cameraActive && !successFlash && (
             <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-center">
-              {/* Green active scanning frame */}
-              <div className="w-[85%] h-[45%] border-2 border-indigo-500/60 rounded-lg relative shadow-[0_0_15px_rgba(99,102,241,0.2)]">
-                {/* Scanning Laser */}
-                <div className="absolute left-0 right-0 h-[2px] bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,1)] top-0 animate-[scan_2.5s_ease-in-out_infinite]" />
+              {/* Wide IATA Reticle */}
+              <div className="w-[85%] h-[40%] border border-white/20 rounded-2xl relative">
+                {/* Active Corners */}
+                <span className="absolute -top-[2px] -left-[2px] w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-xl" />
+                <span className="absolute -top-[2px] -right-[2px] w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-xl" />
+                <span className="absolute -bottom-[2px] -left-[2px] w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-xl" />
+                <span className="absolute -bottom-[2px] -right-[2px] w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-xl" />
                 
-                {/* Corner markers */}
-                <span className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-indigo-400 -mt-[3px] -ml-[3px]" />
-                <span className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-indigo-400 -mt-[3px] -mr-[3px]" />
-                <span className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-indigo-400 -mb-[3px] -ml-[3px]" />
-                <span className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-indigo-400 -mb-[3px] -mr-[3px]" />
+                {/* Horizontal Scan Laser */}
+                <motion.div 
+                  animate={{ top: ['10%', '90%', '10%'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+                  className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-indigo-400 to-transparent shadow-[0_0_15px_rgba(129,140,248,0.8)] opacity-60" 
+                />
+
+                {/* HUD Elements */}
+                <div className="absolute top-2 left-2 text-[8px] font-mono text-indigo-400/60 uppercase font-bold">
+                  ITF / C128 Priority
+                </div>
+                <div className="absolute bottom-2 right-2 text-[8px] font-mono text-indigo-400/60 uppercase font-bold">
+                  Autofocus Active
+                </div>
               </div>
-              <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-4 font-semibold text-center px-4 bg-slate-950/80 py-1 rounded">
-                Align barcode within wide reticle area
+
+              {/* Dynamic Status Text */}
+              <div className="mt-8 bg-slate-950/80 backdrop-blur-md px-6 py-2 rounded-full border border-slate-800 flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping" />
+                <span className="text-[11px] text-slate-100 font-bold uppercase tracking-widest">
+                  {scanStatus === 'scanning' ? 'Scanning...' : 'Hold Steady'}
+                </span>
+              </div>
+              
+              <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-4 font-bold text-center px-6">
+                Align 10-digit barcode within reticle
               </p>
             </div>
           )}
 
-          {/* Initializing / Offline indicator */}
+          {/* Initializing State */}
           {isInitializing && (
-            <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center z-30 space-y-3">
-              <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-slate-400 text-xs">Requesting camera permissions...</p>
+            <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center z-30 space-y-4">
+              <div className="relative">
+                <div className="w-12 h-12 border-2 border-indigo-500/20 rounded-full" />
+                <div className="w-12 h-12 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin absolute inset-0" />
+              </div>
+              <div className="text-center">
+                <p className="text-slate-100 text-sm font-bold tracking-tight">Initializing Camera</p>
+                <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mt-1">Requesting permissions...</p>
+              </div>
             </div>
           )}
 
-          {/* Fallback & Info Box */}
-          {error && !cameraActive && (
-            <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center z-30 p-6 text-center space-y-3">
-              <div className="p-3 bg-amber-500/10 text-amber-400 rounded-full">
-                <Info className="w-8 h-8" />
+          {/* Error Fallback */}
+          {!cameraActive && !isInitializing && (
+            <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center z-30 p-8 text-center">
+              <div className="w-16 h-16 bg-slate-900 rounded-3xl flex items-center justify-center mb-6 border border-slate-800">
+                <Info className="w-8 h-8 text-slate-500" />
               </div>
-              <p className="text-slate-300 text-xs font-semibold max-w-sm">
-                Sandbox Environment Frame Restriction
+              <h4 className="text-slate-100 font-bold mb-2">Camera Access Restricted</h4>
+              <p className="text-slate-500 text-xs leading-relaxed max-w-xs mx-auto mb-6">
+                The browser has blocked camera access in this frame. Open the app in a new tab for native mobile scanning, or use the simulator below.
               </p>
-              <p className="text-slate-500 text-[10px] leading-relaxed max-w-xs">
-                To run native haptic barcode scanning on mobile devices, open the app in a new tab. In the meantime, use the simulator below.
-              </p>
+              <button 
+                onClick={() => window.location.reload()}
+                className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest border border-indigo-500/30 px-4 py-2 rounded-lg hover:bg-indigo-500/5 transition-colors"
+              >
+                Retry Initialization
+              </button>
             </div>
           )}
         </div>
 
-        {/* Continuous Scanning Statistics (Bulk mode) */}
+        {/* Continuous Scanning Stats */}
         {isContinuous && (
-          <div className="bg-indigo-950/40 border-b border-indigo-900/40 px-4 py-2.5 flex justify-between items-center text-xs">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
-              <span className="font-semibold text-indigo-300 uppercase tracking-wider text-[10px]">
-                Continuous Scan Active
+          <div className="bg-indigo-950/40 border-b border-indigo-900/40 px-5 py-3 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+                <div className="w-2 h-2 bg-emerald-500 rounded-full absolute inset-0" />
+              </div>
+              <span className="font-black text-indigo-300 uppercase tracking-tighter text-xs">
+                Continuous Ops Active
               </span>
             </div>
-            <div className="font-mono bg-indigo-950 border border-indigo-800 text-indigo-200 px-2 py-0.5 rounded font-bold">
-              Bags Scanned: {continuousCount}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500 font-bold uppercase">Bags Logged:</span>
+              <div className="font-mono bg-indigo-500 text-white px-3 py-1 rounded-lg font-black text-sm shadow-lg shadow-indigo-600/20">
+                {continuousCount}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Simulated Manual Scanner Barcode Entry Console */}
-        <div className="p-4 bg-slate-950 border-t border-slate-800/60 flex flex-col space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-indigo-400" />
-              Barcode Scanner Simulator Console
-            </span>
-            <span className="text-[9px] text-slate-500">
-              For testing ITF, 1D plates & prefix formats
-            </span>
+        {/* Simulator Console */}
+        <div className="p-5 bg-slate-950 border-t border-slate-800/40">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="p-1 bg-indigo-500/10 rounded border border-indigo-500/20">
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+              </div>
+              <span className="text-[10px] uppercase font-black text-slate-400 tracking-wider">
+                Baggage Tag Simulator
+              </span>
+            </div>
+            <span className="text-[9px] text-slate-600 font-bold uppercase">Test IATA Formats</span>
           </div>
 
-          <form onSubmit={triggerSimulatedScan} className="flex gap-2">
+          <form onSubmit={triggerSimulatedScan} className="flex gap-2 mb-4">
             <input
               type="text"
               value={simulatedInput}
               onChange={(e) => setSimulatedInput(e.target.value)}
-              placeholder="e.g. 0220123456 or LH123456"
-              className="flex-1 bg-slate-900 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded-lg text-xs font-mono tracking-wider placeholder-slate-600"
+              placeholder="e.g. 0220123456"
+              className="flex-1 bg-slate-900 border border-slate-800 focus:border-indigo-500 text-slate-200 px-4 py-2.5 rounded-xl text-xs font-mono tracking-widest placeholder-slate-700 outline-none transition-all"
             />
             <button
               type="submit"
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-lg shadow-indigo-600/10 cursor-pointer"
+              className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-tighter transition shadow-xl shadow-indigo-600/10 active:scale-95"
             >
-              Simulate Scan
+              Simulate
             </button>
           </form>
 
-          {/* Quick presets for testers */}
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            <span className="text-[9px] text-slate-600 self-center">Presets:</span>
+          <div className="flex flex-wrap gap-1.5">
             {[
-              { val: '0220102943', name: 'LH Plate (0220)' },
-              { val: 'LH102943', name: 'LH Prefix (LH)' },
-              { val: '0724987654', name: 'LX Plate (0724)' },
-              { val: 'LX987654', name: 'LX Prefix (LX)' },
-              { val: '0098555444', name: 'AI Plate (0098)' }
+              { val: '0220102943', name: 'LH ITF' },
+              { val: 'LH102943', name: 'LH C128' },
+              { val: '0724987654', name: 'LX ITF' },
+              { val: 'LX987654', name: 'LX C128' }
             ].map((preset) => (
               <button
                 key={preset.val}
                 type="button"
                 onClick={() => setSimulatedInput(preset.val)}
-                className="text-[9px] bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 px-2 py-0.5 rounded transition cursor-pointer"
+                className="text-[9px] bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-500 hover:text-slate-200 px-3 py-1.5 rounded-lg transition-all font-bold uppercase"
               >
                 {preset.name}
               </button>
@@ -274,40 +346,27 @@ export default function ScannerModal({
           </div>
         </div>
 
-        {/* Footer controls */}
-        <div className="p-4 bg-slate-900 border-t border-slate-800/80 flex justify-end gap-3">
+        {/* Action Bar */}
+        <div className="p-5 bg-slate-900 border-t border-slate-800/60 flex flex-col sm:flex-row gap-3">
           {isContinuous && onFinishContinuous ? (
             <button
               type="button"
               onClick={onFinishContinuous}
-              className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-indigo-600/15 text-center cursor-pointer"
+              className="flex-1 px-6 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-black uppercase tracking-widest transition shadow-2xl shadow-indigo-600/20 text-center active:scale-[0.98]"
             >
-              Finish & Review ({continuousCount} Bags)
+              Complete Batch ({continuousCount} Bags)
             </button>
           ) : (
             <button
               type="button"
               onClick={onClose}
-              className="w-full sm:w-auto px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition text-center cursor-pointer"
+              className="flex-1 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl text-xs font-black uppercase tracking-widest transition text-center"
             >
-              Close Scanner
+              Cancel Operation
             </button>
           )}
         </div>
       </motion.div>
     </div>
   );
-}
-
-// Inject custom CSS for barcode laser scanning animation
-if (typeof document !== 'undefined') {
-  const style = document.createElement('style');
-  style.innerHTML = `
-    @keyframes scan {
-      0% { top: 0%; opacity: 0.8; }
-      50% { top: 100%; opacity: 1; }
-      100% { top: 0%; opacity: 0.8; }
-    }
-  `;
-  document.head.appendChild(style);
 }
