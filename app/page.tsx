@@ -414,6 +414,7 @@ export default function RushBaggageWizard() {
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [mounted, setMounted] = useState(false);
 
   // Mobile-first collapsible navigation state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -503,15 +504,7 @@ export default function RushBaggageWizard() {
   const [editingRecord, setEditingRecord] = useState<BaggageRecord | null>(null);
 
   // Configurable IATA Airline Map state
-  const [iataAirlineMap, setIataAirlineMap] = useState<Record<string, string>>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('rbw_iata_airline_map');
-      if (saved) {
-        try { return JSON.parse(saved); } catch (e) {}
-      }
-    }
-    return DEFAULT_IATA_AIRLINE_MAP;
-  });
+  const [iataAirlineMap, setIataAirlineMap] = useState<Record<string, string>>(DEFAULT_IATA_AIRLINE_MAP);
 
   const saveIataAirlineMap = (newMap: Record<string, string>) => {
     setIataAirlineMap(newMap);
@@ -644,19 +637,7 @@ export default function RushBaggageWizard() {
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   // Intelligent Importer States
-  const [mappingDictionary, setMappingDictionary] = useState<DictionaryEntry[]>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('rbw_mapping_dictionary');
-      if (stored) {
-        try {
-          return JSON.parse(stored);
-        } catch (e) {
-          // Fallback
-        }
-      }
-    }
-    return DEFAULT_MAPPING_DICTIONARY;
-  });
+  const [mappingDictionary, setMappingDictionary] = useState<DictionaryEntry[]>(DEFAULT_MAPPING_DICTIONARY);
 
   const saveMappingDictionary = (newDict: DictionaryEntry[]) => {
     setMappingDictionary(newDict);
@@ -688,19 +669,7 @@ export default function RushBaggageWizard() {
   const [showDictionaryEditor, setShowDictionaryEditor] = useState(false);
 
   // Lock Mapping Dictionary States
-  const [lockDictionary, setLockDictionary] = useState<Record<string, string>>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('rbw_lock_dictionary');
-      if (stored) {
-        try {
-          return JSON.parse(stored);
-        } catch (e) {
-          // Fallback
-        }
-      }
-    }
-    return DEFAULT_LOCK_DICTIONARY;
-  });
+  const [lockDictionary, setLockDictionary] = useState<Record<string, string>>(DEFAULT_LOCK_DICTIONARY);
 
   const saveLockDictionary = (newDict: Record<string, string>) => {
     setLockDictionary(newDict);
@@ -716,6 +685,9 @@ export default function RushBaggageWizard() {
 
   // Load from local storage
   useEffect(() => {
+    setTimeout(() => {
+      setMounted(true);
+    }, 0);
     const storedUser = localStorage.getItem('rbw_logged_in_user');
     if (storedUser === 'lh' || storedUser === 'admin') {
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -739,6 +711,28 @@ export default function RushBaggageWizard() {
       // Default initial records
       setBaggageList(INITIAL_MOCK_DATA);
       localStorage.setItem('rbw_baggage_list', JSON.stringify(INITIAL_MOCK_DATA));
+    }
+
+    // Load additional dictionaries to prevent hydration mismatch
+    const savedIata = localStorage.getItem('rbw_iata_airline_map');
+    if (savedIata) {
+      try {
+        setIataAirlineMap(JSON.parse(savedIata));
+      } catch (e) {}
+    }
+
+    const storedDict = localStorage.getItem('rbw_mapping_dictionary');
+    if (storedDict) {
+      try {
+        setMappingDictionary(JSON.parse(storedDict));
+      } catch (e) {}
+    }
+
+    const storedLock = localStorage.getItem('rbw_lock_dictionary');
+    if (storedLock) {
+      try {
+        setLockDictionary(JSON.parse(storedLock));
+      } catch (e) {}
     }
   }, []);
 
@@ -1338,11 +1332,84 @@ export default function RushBaggageWizard() {
       }
     }
 
+    const getLegacyFieldsFromProtocol = (
+      record: BaggageRecord,
+      clearedAction: string,
+      nonClearedAction: string
+    ) => {
+      if (record.registryType === 'Departure') {
+        return {
+          status: record.status || 'Received',
+          customsStatus: 'Pending' as const,
+          disposition: (record.departureForwardingStatus === 'Forwarding Sent' ? 'Forwarded' : 'Awaiting Forwarding') as any,
+          dispositionLocation: record.departureStorageLocation || 'LHG Office'
+        };
+      }
+
+      if (!record.protocol) {
+        return {
+          status: 'Expected' as const,
+          customsStatus: 'Pending' as const,
+          disposition: 'Pending' as const,
+          dispositionLocation: '' as any
+        };
+      }
+
+      if (record.protocol === 'Cleared Baggage') {
+        let disposition: any = 'Pending';
+        let dispositionLocation: any = '';
+
+        if (clearedAction === 'deliveryAgent') {
+          disposition = 'Delivered';
+          dispositionLocation = record.deliveryAgent || 'VVM';
+        } else if (clearedAction === 'storage') {
+          disposition = 'Storage';
+          dispositionLocation = 'LHG Office';
+        } else if (clearedAction === 'domesticForwarding') {
+          disposition = 'Forwarded';
+          const df = record.domesticForwarding || 'Air India';
+          dispositionLocation = df === 'IndiGo' ? 'Indigo' : df === 'SpiceJet' ? 'Spice Jet' : 'Air India';
+        }
+
+        return {
+          status: 'Received' as const,
+          customsStatus: 'Cleared' as const,
+          disposition,
+          dispositionLocation
+        };
+      } else {
+        let disposition: any = 'Pending';
+        let dispositionLocation: any = '';
+
+        if (nonClearedAction === 'arrivalBelt') {
+          disposition = 'Belt 9';
+          dispositionLocation = 'Belt 9';
+        } else if (nonClearedAction === 'handover') {
+          disposition = 'Handover';
+          dispositionLocation = 'Other Airline';
+        } else if (nonClearedAction === 'warehouse') {
+          disposition = 'CWC';
+          dispositionLocation = 'CWC';
+        } else if (nonClearedAction === 'reexport') {
+          disposition = 'Re-export';
+          dispositionLocation = 'Hub Re-export';
+        }
+
+        return {
+          status: 'Received' as const,
+          customsStatus: 'Not Cleared' as const,
+          disposition,
+          dispositionLocation
+        };
+      }
+    };
+
     const updatedList = baggageList.map(item => {
       if (item.id === editingRecord.id) {
-        // Automatically assign correct date triggers if status changes
+        const legacyFields = getLegacyFieldsFromProtocol(editingRecord, editingClearedAction, editingNonClearedAction);
+
         const wasReceived = item.status === 'Received';
-        const isReceived = editingRecord.status === 'Received';
+        const isReceived = legacyFields.status === 'Received';
         
         let receivedAt = editingRecord.receivedAt || item.receivedAt;
         if (!wasReceived && isReceived) {
@@ -1351,14 +1418,14 @@ export default function RushBaggageWizard() {
           receivedAt = undefined;
         }
 
-        // Handle disposition/location changes
         let dispositionUpdatedAt = item.dispositionUpdatedAt;
-        if (item.disposition !== editingRecord.disposition || item.dispositionLocation !== editingRecord.dispositionLocation) {
+        if (item.disposition !== legacyFields.disposition || item.dispositionLocation !== legacyFields.dispositionLocation) {
           dispositionUpdatedAt = new Date().toISOString();
         }
 
         return {
           ...editingRecord,
+          ...legacyFields,
           deliveryAgent: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'deliveryAgent') ? editingRecord.deliveryAgent as any : undefined,
           storageOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'storage') ? editingRecord.storageOption as any : undefined,
           domesticForwarding: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Cleared Baggage' && editingClearedAction === 'domesticForwarding') ? editingRecord.domesticForwarding as any : undefined,
@@ -1368,7 +1435,7 @@ export default function RushBaggageWizard() {
           reexportOption: (editingRecord.registryType === 'Arrival' && editingRecord.protocol === 'Non-Cleared / Other' && editingNonClearedAction === 'reexport') ? editingRecord.reexportOption as any : undefined,
           receivedAt,
           dispositionUpdatedAt,
-          customsUpdatedAt: item.customsStatus !== editingRecord.customsStatus ? new Date().toISOString() : item.customsUpdatedAt
+          customsUpdatedAt: item.customsStatus !== legacyFields.customsStatus ? new Date().toISOString() : item.customsUpdatedAt
         };
       }
       return item;
@@ -2198,6 +2265,11 @@ export default function RushBaggageWizard() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Render empty container on server side to ensure zero hydration mismatches from client-injected iframe attributes or local storage states
+  if (!mounted) {
+    return <div className="min-h-screen bg-slate-950" />;
+  }
 
   // If user is not logged in, render the custom modern Login screen
   if (!user) {
@@ -5728,396 +5800,256 @@ export default function RushBaggageWizard() {
                 <>
                   {/* Protocol selector */}
                   <div className="space-y-1.5 bg-slate-950/20 p-3 rounded-lg border border-slate-800/60">
-                <label className="text-[10px] font-bold text-indigo-400 uppercase block">Dispositions & Customs Operations Protocol *</label>
-                <select
-                  required
-                  value={editingRecord.protocol || ''}
-                  onChange={(e) => {
-                    const nextProtocol = e.target.value as any;
-                    setEditingClearedAction('');
-                    setEditingNonClearedAction('');
-                    setEditingRecord({
-                      ...editingRecord,
-                      protocol: nextProtocol,
-                      deliveryAgent: undefined,
-                      storageOption: undefined,
-                      domesticForwarding: undefined,
-                      arrivalBelt: undefined,
-                      handoverOption: undefined,
-                      warehouseOption: undefined,
-                      reexportOption: undefined
-                    });
-                  }}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                >
-                  <option value="">-- Choose Protocol --</option>
-                  <option value="Cleared Baggage">Cleared Baggage</option>
-                  <option value="Non-Cleared / Other">Non-Cleared / Other</option>
-                </select>
-              </div>
-
-              {/* Dynamic Sub-options */}
-              <AnimatePresence initial={false}>
-                {editingRecord.protocol && (
-                  <motion.div
-                    key={editingRecord.protocol}
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3 overflow-hidden"
-                  >
-                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide">
-                      {editingRecord.protocol} Sub-options
-                    </p>
-
-                    {editingRecord.protocol === 'Cleared Baggage' ? (
-                      <div className="space-y-4">
-                        {/* Level 2: Master dropdown for Cleared Baggage Action */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action *</label>
-                          <select
-                            required
-                            value={editingClearedAction}
-                            onChange={(e) => {
-                              const act = e.target.value;
-                              setEditingClearedAction(act);
-                              setEditingRecord(prev => prev ? ({
-                                ...prev,
-                                deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
-                                storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
-                                domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
-                              }) : null);
-                            }}
-                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                          >
-                            <option value="">-- Select Cleared Baggage Action --</option>
-                            <option value="deliveryAgent">Delivery Agent</option>
-                            <option value="storage">Storage</option>
-                            <option value="domesticForwarding">Domestic Baggage Forwarding</option>
-                          </select>
-                        </div>
-
-                        <AnimatePresence initial={false}>
-                          {editingClearedAction === 'deliveryAgent' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
-                              <select
-                                required
-                                value={editingRecord.deliveryAgent || 'VVM'}
-                                onChange={(e) => setEditingRecord({...editingRecord, deliveryAgent: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="VVM">VVM</option>
-                                <option value="Outlook">Outlook</option>
-                                <option value="Advik">Advik</option>
-                              </select>
-                            </motion.div>
-                          )}
-
-                          {editingClearedAction === 'storage' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
-                              <select
-                                required
-                                value={editingRecord.storageOption || 'Standard Warehousing – LHG Office'}
-                                onChange={(e) => setEditingRecord({...editingRecord, storageOption: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
-                              </select>
-                            </motion.div>
-                          )}
-
-                          {editingClearedAction === 'domesticForwarding' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
-                              <select
-                                required
-                                value={editingRecord.domesticForwarding || 'Air India'}
-                                onChange={(e) => setEditingRecord({...editingRecord, domesticForwarding: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="Air India">Air India</option>
-                                <option value="IndiGo">IndiGo</option>
-                                <option value="SpiceJet">SpiceJet</option>
-                              </select>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action *</label>
-                          <select
-                            required
-                            value={editingNonClearedAction}
-                            onChange={(e) => {
-                              const act = e.target.value;
-                              setEditingNonClearedAction(act);
-                              setEditingRecord(prev => prev ? ({
-                                ...prev,
-                                arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
-                                handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
-                                warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
-                                reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
-                              }) : null);
-                            }}
-                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
-                          >
-                            <option value="">-- Select Non-Cleared / Other Action --</option>
-                            <option value="arrivalBelt">Arrival Belt</option>
-                            <option value="handover">Handover</option>
-                            <option value="warehouse">Warehouse</option>
-                            <option value="reexport">Re-export</option>
-                          </select>
-                        </div>
-
-                        <AnimatePresence initial={false}>
-                          {editingNonClearedAction === 'arrivalBelt' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
-                              <select
-                                required
-                                value={editingRecord.arrivalBelt || 'Arrival Belt 9'}
-                                onChange={(e) => setEditingRecord({...editingRecord, arrivalBelt: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="Arrival Belt 9">Belt 9 (Default)</option>
-                              </select>
-                              <p className="text-[9px] text-slate-500 italic mt-0.5">Default holding area with queue check.</p>
-                            </motion.div>
-                          )}
-
-                          {editingNonClearedAction === 'handover' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
-                              <select
-                                required
-                                value={editingRecord.handoverOption || 'Partner Airlines'}
-                                onChange={(e) => setEditingRecord({...editingRecord, handoverOption: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="Partner Airlines">Partner Airlines</option>
-                              </select>
-                              <p className="text-[9px] text-slate-500 italic mt-0.5">Transfer custody to the designated partner airline.</p>
-                            </motion.div>
-                          )}
-
-                          {editingNonClearedAction === 'warehouse' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
-                              <select
-                                required
-                                value={editingRecord.warehouseOption || 'CWC Warehouse'}
-                                onChange={(e) => setEditingRecord({...editingRecord, warehouseOption: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="CWC Warehouse">CWC Warehouse</option>
-                              </select>
-                              <p className="text-[9px] text-slate-500 italic mt-0.5">Secure central depot storage.</p>
-                            </motion.div>
-                          )}
-
-                          {editingNonClearedAction === 'reexport' && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="space-y-1 overflow-hidden"
-                            >
-                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
-                              <select
-                                required
-                                value={editingRecord.reexportOption || 'Re-export to Carrier Hub'}
-                                onChange={(e) => setEditingRecord({...editingRecord, reexportOption: e.target.value as any})}
-                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer"
-                              >
-                                <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
-                              </select>
-                              <p className="text-[9px] text-slate-500 italic mt-0.5">Repatriate the baggage to the originating carrier&apos;s hub.</p>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Arrival Reconciliation Status */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase">Arrival Status</label>
-                <select
-                  value={editingRecord.status}
-                  onChange={(e) => setEditingRecord({
-                    ...editingRecord, 
-                    status: e.target.value as any,
-                    // If moving back to Expected, clear details
-                    receivedAt: e.target.value === 'Expected' ? undefined : (editingRecord.receivedAt || new Date().toISOString())
-                  })}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                >
-                  <option value="Expected">Expected (Bag has not arrived at terminal)</option>
-                  <option value="Received">Received (Bag is arrived & registered)</option>
-                </select>
-              </div>
-
-              {editingRecord.status === 'Received' && (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Customs state */}
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Customs Clearance Status</label>
-                      <select
-                        value={editingRecord.customsStatus}
-                        onChange={(e) => setEditingRecord({
+                    <label className="text-[10px] font-bold text-indigo-400 uppercase block">Dispositions & Customs Operations Protocol *</label>
+                    <select
+                      required
+                      value={editingRecord.protocol || ''}
+                      onChange={(e) => {
+                        const nextProtocol = e.target.value as any;
+                        setEditingClearedAction('');
+                        setEditingNonClearedAction('');
+                        setEditingRecord({
                           ...editingRecord,
-                          customsStatus: e.target.value as any,
-                          customsReason: (e.target.value !== 'Not Cleared' && e.target.value !== 'Marked Preventive') ? '' : 'Lack of documents'
-                        })}
-                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                      >
-                        <option value="Pending">Pending (In customs queue)</option>
-                        <option value="Cleared">Cleared (Granted immediate passage)</option>
-                        <option value="Not Cleared">Not Cleared (Held by customs)</option>
-                        <option value="Marked Preventive">Marked Preventive (Severe Hold - Re-export/Passenger Arrive)</option>
-                      </select>
-                    </div>
-
-                    {/* Customs Reason if Held */}
-                    {(editingRecord.customsStatus === 'Not Cleared' || editingRecord.customsStatus === 'Marked Preventive') && (
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">Customs Hold Reason</label>
-                        <select
-                          value={editingRecord.customsReason}
-                          onChange={(e) => setEditingRecord({
-                            ...editingRecord,
-                            customsReason: e.target.value as any
-                          })}
-                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
-                        >
-                          <option value="Lack of documents">Lack of documents</option>
-                          <option value="Awaiting documents">Awaiting documents</option>
-                          <option value="Refused">Refused</option>
-                          <option value="Deferred">Deferred</option>
-                          <option value="Preventive">Preventive</option>
-                        </select>
-                      </div>
-                    )}
+                          protocol: nextProtocol,
+                          deliveryAgent: undefined,
+                          storageOption: undefined,
+                          domesticForwarding: undefined,
+                          arrivalBelt: undefined,
+                          handoverOption: undefined,
+                          warehouseOption: undefined,
+                          reexportOption: undefined
+                        });
+                      }}
+                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                    >
+                      <option value="">-- Choose Protocol --</option>
+                      <option value="Cleared Baggage">Cleared Baggage</option>
+                      <option value="Non-Cleared / Other">Non-Cleared / Other</option>
+                    </select>
                   </div>
 
-                  {/* Disposition Routing options */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Disposition action</label>
-                      <select
-                        value={editingRecord.disposition}
-                        onChange={(e) => setEditingRecord({
-                          ...editingRecord,
-                          disposition: e.target.value as any,
-                          dispositionLocation: e.target.value === 'Storage' ? 'LHG Office' : ''
-                        })}
-                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded"
+                  {/* Dynamic Sub-options */}
+                  <AnimatePresence initial={false}>
+                    {editingRecord.protocol && (
+                      <motion.div
+                        key={editingRecord.protocol}
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-4 overflow-hidden"
                       >
-                        <option value="Pending">Pending</option>
-                        <option value="Storage">Storage/Warehousing</option>
-                        <option value="Delivered">Delivered (Direct Dispatch)</option>
-                        <option value="Forwarded">Forwarded (Domestic connection)</option>
-                        <option value="Belt 9">Belt 9 (Arrival Lounge)</option>
-                        <option value="Handover">Handover (Other Airline)</option>
-                        <option value="CWC">CWC (Cargo Depot)</option>
-                        <option value="Re-export">Re-export (Hub return)</option>
-                      </select>
-                    </div>
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide">
+                          {editingRecord.protocol} Sub-options
+                        </p>
 
-                    {/* Disposition Locations based on constraints */}
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Storage Location / Destination</label>
-                      
-                      {editingRecord.customsStatus === 'Cleared' ? (
-                        <select
-                          value={editingRecord.dispositionLocation}
-                          onChange={(e) => setEditingRecord({
-                            ...editingRecord,
-                            dispositionLocation: e.target.value as any
-                          })}
-                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded text-emerald-400 font-semibold"
-                        >
-                          <option value="">-- Select Cleared Route --</option>
-                          <optgroup label="Delivery Agents">
-                            <option value="VVM">VVM Delivery Agent</option>
-                            <option value="Outlook">Outlook Messenger</option>
-                            <option value="Advik">Advik Cargo</option>
-                          </optgroup>
-                          <optgroup label="Warehouse Stalls">
-                            <option value="LHG Office">LHG Office</option>
-                            <option value="BMA">BMA</option>
-                            <option value="Level 4 Checks">Level 4 Checks</option>
-                          </optgroup>
-                          <optgroup label="Domestic Forwarding (Airlines)">
-                            <option value="Air India">Air India Link</option>
-                            <option value="Indigo">Indigo connection</option>
-                            <option value="Spice Jet">Spice Jet connection</option>
-                          </optgroup>
-                        </select>
-                      ) : (
-                        <select
-                          value={editingRecord.dispositionLocation}
-                          onChange={(e) => setEditingRecord({
-                            ...editingRecord,
-                            dispositionLocation: e.target.value as any
-                          })}
-                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded text-red-400 font-semibold"
-                        >
-                          <option value="">-- Select Non-Cleared placement --</option>
-                          <option value="Belt 9">Arrival Belt 9</option>
-                          <option value="CWC">CWC Warehouse Depot</option>
-                          <option value="Hub Re-export">Re-export hub cargo</option>
-                          <option value="Other Airline">Handover to other airlines</option>
-                          <option value="LHG Office">LHG Office</option>
-                        </select>
-                      )}
-                    </div>
-                  </div>
+                        {editingRecord.protocol === 'Cleared Baggage' ? (
+                          <div className="space-y-4">
+                            {/* Level 2: Master dropdown for Cleared Baggage Action */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Cleared Baggage Action Options *</label>
+                              <select
+                                required
+                                value={editingClearedAction}
+                                onChange={(e) => {
+                                  const act = e.target.value;
+                                  setEditingClearedAction(act);
+                                  setEditingRecord(prev => prev ? ({
+                                    ...prev,
+                                    deliveryAgent: act === 'deliveryAgent' ? 'VVM' : undefined,
+                                    storageOption: act === 'storage' ? 'Standard Warehousing – LHG Office' : undefined,
+                                    domesticForwarding: act === 'domesticForwarding' ? 'Air India' : undefined
+                                  }) : null);
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                              >
+                                <option value="">-- Select Cleared Baggage Action --</option>
+                                <option value="deliveryAgent">Delivery Agent</option>
+                                <option value="storage">Storage</option>
+                                <option value="domesticForwarding">Domestic Baggage Forwarding</option>
+                              </select>
+                            </div>
+
+                            <AnimatePresence initial={false}>
+                              {editingClearedAction === 'deliveryAgent' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Delivery Agent *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.deliveryAgent || 'VVM'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, deliveryAgent: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="VVM">VVM</option>
+                                    <option value="Outlook">Outlook</option>
+                                    <option value="Advik">Advik</option>
+                                  </select>
+                                </motion.div>
+                              )}
+
+                              {editingClearedAction === 'storage' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block font-sans">Storage Location *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.storageOption || 'Standard Warehousing – LHG Office'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, storageOption: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="Standard Warehousing – LHG Office">Standard Warehousing – LHG Office</option>
+                                  </select>
+                                </motion.div>
+                              )}
+
+                              {editingClearedAction === 'domesticForwarding' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Forward Via *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.domesticForwarding || 'Air India'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, domesticForwarding: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="Air India">Air India</option>
+                                    <option value="IndiGo">IndiGo</option>
+                                    <option value="SpiceJet">SpiceJet</option>
+                                  </select>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {/* Level 2: Master dropdown for Non-Cleared / Other Action */}
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-300 uppercase block">Non-Cleared / Other Action Options *</label>
+                              <select
+                                required
+                                value={editingNonClearedAction}
+                                onChange={(e) => {
+                                  const act = e.target.value;
+                                  setEditingNonClearedAction(act);
+                                  setEditingRecord(prev => prev ? ({
+                                    ...prev,
+                                    arrivalBelt: act === 'arrivalBelt' ? 'Arrival Belt 9' : undefined,
+                                    handoverOption: act === 'handover' ? 'Partner Airlines' : undefined,
+                                    warehouseOption: act === 'warehouse' ? 'CWC Warehouse' : undefined,
+                                    reexportOption: act === 'reexport' ? 'Re-export to Carrier Hub' : undefined
+                                  }) : null);
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                              >
+                                <option value="">-- Select Non-Cleared / Other Action --</option>
+                                <option value="arrivalBelt">Arrival Belt</option>
+                                <option value="handover">Handover</option>
+                                <option value="warehouse">Warehouse</option>
+                                <option value="reexport">Re-export</option>
+                              </select>
+                            </div>
+
+                            <AnimatePresence initial={false}>
+                              {editingNonClearedAction === 'arrivalBelt' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Arrival Belt *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.arrivalBelt || 'Arrival Belt 9'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, arrivalBelt: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="Arrival Belt 9">Belt 9</option>
+                                  </select>
+                                </motion.div>
+                              )}
+
+                              {editingNonClearedAction === 'handover' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Handover To *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.handoverOption || 'Partner Airlines'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, handoverOption: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="Partner Airlines">Partner Airlines</option>
+                                  </select>
+                                </motion.div>
+                              )}
+
+                              {editingNonClearedAction === 'warehouse' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Warehouse *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.warehouseOption || 'CWC Warehouse'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, warehouseOption: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="CWC Warehouse">CWC Warehouse</option>
+                                  </select>
+                                </motion.div>
+                              )}
+
+                              {editingNonClearedAction === 'reexport' && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="space-y-1 overflow-hidden"
+                                >
+                                  <label className="text-[10px] font-bold text-slate-300 uppercase block">Re-export Destination *</label>
+                                  <select
+                                    required
+                                    value={editingRecord.reexportOption || 'Re-export to Carrier Hub'}
+                                    onChange={(e) => setEditingRecord({...editingRecord, reexportOption: e.target.value as any})}
+                                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-1.5 px-3 rounded cursor-pointer font-semibold"
+                                  >
+                                    <option value="Re-export to Carrier Hub">Return to Carrier Hub</option>
+                                  </select>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* Storage Location Remarks (requested feature) */}
                   <div className="space-y-1.5">
@@ -6184,10 +6116,8 @@ export default function RushBaggageWizard() {
                       </div>
                     </div>
                   </div>
-                </>
-              )}
 
-              {/* Arrival Reconciliation Remarks field (Moved outside status check for consistency) */}
+                  {/* Arrival Reconciliation Remarks field (Moved outside status check for consistency) */}
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase">General Remarks</label>
                     <textarea
