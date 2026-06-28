@@ -432,6 +432,12 @@ export default function RushBaggageWizard() {
   const [filterDateRange, setFilterDateRange] = useState<{ type: 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'prevMonth' | 'custom'; from?: string; to?: string }>({ type: 'all' });
   const [filterRegistry, setFilterRegistry] = useState<'Arrival' | 'Departure' | 'Combined'>('Combined');
 
+  // Intelligent Scanner States
+  const [scannerResult, setScannerResult] = useState<BaggageRecord | null>(null);
+  const [scannerResults, setScannerResults] = useState<BaggageRecord[]>([]); // For name searches that return multiples
+  const [scannerSearchType, setScannerSearchType] = useState<'none' | 'tag' | 'pir' | 'name'>('none');
+  const [scannedQuery, setScannedQuery] = useState('');
+
   // Quick scan inputs & barcode scanning
   const [scannerInput, setScannerInput] = useState('');
   const [scannerNotification, setScannerNotification] = useState<{
@@ -529,7 +535,7 @@ export default function RushBaggageWizard() {
 
   // Scanner states
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [scannerTargetField, setScannerTargetField] = useState<'originalTag' | 'rushTag' | 'bulk'>('originalTag');
+  const [scannerTargetField, setScannerTargetField] = useState<'originalTag' | 'rushTag' | 'bulk' | 'gate'>('originalTag');
   const [continuousScannedTags, setContinuousScannedTags] = useState<string[]>([]);
 
   // Duplicate resolution state
@@ -558,6 +564,9 @@ export default function RushBaggageWizard() {
       setNewBag(prev => ({ ...prev, originalTag: barcode, receivedAt: new Date().toISOString() }));
     } else if (scannerTargetField === 'rushTag') {
       setNewBag(prev => ({ ...prev, rushTag: barcode, receivedAt: new Date().toISOString() }));
+    } else if (scannerTargetField === 'gate') {
+      handleScanSubmit(undefined, barcode);
+      setIsScannerOpen(false);
     }
   };
 
@@ -834,59 +843,66 @@ export default function RushBaggageWizard() {
   }, [baggageList, activeRegistry, getDaysInStorage]);
 
   // Scanner/Reconciliation Matcher
-  const handleScanSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const query = scannerInput.trim().toUpperCase();
+  const handleScanSubmit = (e?: React.FormEvent, overrideQuery?: string) => {
+    if (e) e.preventDefault();
+    const query = (overrideQuery || scannerInput).trim().toUpperCase();
     if (!query) return;
 
-    // Try finding bag by Original Tag, Rush Tag, or PIR with intelligent IATA recognition
-    const index = baggageList.findIndex(b => 
-      (b.originalTag && matchTag(b.originalTag, query, iataAirlineMap)) ||
-      (b.rushTag && matchTag(b.rushTag, query, iataAirlineMap)) ||
-      (b.pir && b.pir.toUpperCase() === query)
-    );
+    setScannerNotification(null);
+    setScannerResult(null);
+    setScannerResults([]);
+    setScannedQuery(query);
 
-    if (index !== -1) {
-      const match = baggageList[index];
-      if (match.status === 'Received') {
+    // 1. Detect Search Type
+    const isLikelyTag = /^\d{10}$/.test(query) || /^[A-Z]{2}\d+$/.test(query) || /^\d+$/.test(query);
+    const isLikelyPIR = /^[A-Z]{3}[A-Z]{2}\d{5}$/.test(query); // e.g. BOMEK12345
+    
+    let type: 'tag' | 'pir' | 'name' = 'name';
+    if (isLikelyTag) type = 'tag';
+    else if (isLikelyPIR) type = 'pir';
+
+    setScannerSearchType(type);
+
+    if (type === 'tag') {
+      const match = baggageList.find(b => 
+        (b.originalTag && matchTag(b.originalTag, query, iataAirlineMap)) ||
+        (b.rushTag && matchTag(b.rushTag, query, iataAirlineMap))
+      );
+
+      if (match) {
+        setScannerResult(match);
         setScannerNotification({
-          text: `Bag already received: ${match.name} (${match.pir || 'No PIR'}) on flight ${match.flightNo}`,
-          type: 'warning'
+          text: `MATCH FOUND: Baggage Tag ${getCanonicalTag(query, iataAirlineMap)} is already registered.`,
+          type: 'success'
         });
       } else {
-        const updated = [...baggageList];
-        updated[index] = {
-          ...match,
-          status: 'Received',
-          receivedAt: new Date().toISOString(),
-          disposition: 'Storage',
-          dispositionLocation: 'LHG Office', // default initial arrival storage
-          dispositionUpdatedAt: new Date().toISOString()
-        };
-        saveBaggageData(updated);
         setScannerNotification({
-          text: `SUCCESS: Marked ${match.name}'s bag (${getCanonicalTag(query, iataAirlineMap)}) as RECEIVED. Placed in storage at LHG Office.`,
-          type: 'success'
+          text: `NO RECORD FOUND: Tag '${query}' was not found. Register this as a new record?`,
+          type: 'warning'
+        });
+      }
+    } else if (type === 'pir') {
+      const match = baggageList.find(b => b.pir && b.pir.toUpperCase() === query);
+      if (match) {
+        setScannerResult(match);
+      } else {
+        setScannerNotification({
+          text: `NO RECORD FOUND: No baggage record for PIR '${query}'. Please register using a Tag number.`,
+          type: 'error'
         });
       }
     } else {
-      setScannerNotification({
-        text: `TAG NOT FOUND: '${query}' was not in the expected manifest. You can manually register it below.`,
-        type: 'error'
-      });
-      // prefill the tag in manual entry using canonical representation
-      const canonicalQuery = getCanonicalTag(query, iataAirlineMap);
-      const isLikelyRush = query.startsWith('LX') || /^[A-Z]{2}\d+$/.test(canonicalQuery);
-      setNewBag(prev => ({
-        ...prev,
-        pir: query.startsWith('BOM') || query.startsWith('DEL') ? query : '',
-        originalTag: !query.startsWith('BOM') && !query.startsWith('DEL') && !isLikelyRush ? canonicalQuery : '',
-        rushTag: isLikelyRush ? canonicalQuery : ''
-      }));
-      setShowAddForm(true);
+      const matches = baggageList.filter(b => b.name.toUpperCase().includes(query));
+      if (matches.length > 0) {
+        setScannerResults(matches);
+      } else {
+        setScannerNotification({
+          text: `NO RECORD FOUND: No results for '${query}'. Please register via Tag number.`,
+          type: 'error'
+        });
+      }
     }
     setScannerInput('');
-    setTimeout(() => setScannerNotification(null), 8000);
   };
 
   // Manual Addition
@@ -2005,11 +2021,12 @@ export default function RushBaggageWizard() {
 
   // Results Summary
   const summary = useMemo(() => {
-    const total = filteredBaggage.length;
+    const totalRecords = baggageList.length;
+    const filteredRecords = filteredBaggage.length;
     const arrival = filteredBaggage.filter(b => b.registryType === 'Arrival').length;
     const departure = filteredBaggage.filter(b => b.registryType === 'Departure').length;
-    return { total, arrival, departure };
-  }, [filteredBaggage]);
+    return { totalRecords, filteredRecords, arrival, departure };
+  }, [baggageList, filteredBaggage]);
 
   // Export to Excel
   const exportToExcel = () => {
@@ -2611,9 +2628,22 @@ export default function RushBaggageWizard() {
                 <QrCode className="w-5 h-5 text-indigo-400" />
                 <h3 className="font-bold text-slate-200 text-sm">Gate Scanner & Reconciliation</h3>
               </div>
-              <p className="text-xs text-slate-400 mb-4">
-                Scan or type Original Tag, Rush Tag, or PIR code to mark as &quot;Received&quot; on flight arrival instantly.
-              </p>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
+                <p className="text-xs text-slate-400">
+                  Scan or search via Original Tag, Rush Tag, PIR, or Passenger Name.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScannerTargetField('gate');
+                    setIsScannerOpen(true);
+                  }}
+                  className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] uppercase font-bold tracking-wider px-4 py-2 rounded-lg transition"
+                >
+                  <Camera className="w-4 h-4" />
+                  Scan Baggage Tag
+                </button>
+              </div>
 
               <form onSubmit={handleScanSubmit} className="space-y-3">
                 <div className="relative">
@@ -2642,6 +2672,127 @@ export default function RushBaggageWizard() {
                     : 'bg-red-950/40 border-red-500/30 text-red-300'
                 }`}>
                   <p className="font-semibold">{scannerNotification.text}</p>
+                  {scannerNotification.type === 'warning' && scannerSearchType === 'tag' && (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const canonical = getCanonicalTag(scannedQuery, iataAirlineMap);
+                          const isRush = scannedQuery.startsWith('LX') || (scannedQuery.length === 8 && /^[A-Z]{2}/.test(scannedQuery));
+                          setNewBag(prev => ({
+                            ...prev,
+                            originalTag: isRush ? '' : canonical,
+                            rushTag: isRush ? canonical : '',
+                            receivedAt: new Date().toISOString()
+                          }));
+                          setRegistrationContext('arrival');
+                          setShowAddForm(true);
+                          setScannerNotification(null);
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                      >
+                        Register as Original Tag
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const canonical = getCanonicalTag(scannedQuery, iataAirlineMap);
+                          setNewBag(prev => ({
+                            ...prev,
+                            originalTag: '',
+                            rushTag: canonical,
+                            receivedAt: new Date().toISOString()
+                          }));
+                          setRegistrationContext('arrival');
+                          setShowAddForm(true);
+                          setScannerNotification(null);
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                      >
+                        Register as Rush Tag
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* SEARCH RESULTS DISPLAY */}
+              {(scannerResult || scannerResults.length > 0) && (
+                <div className="mt-4 space-y-3 animate-in slide-in-from-top-2 duration-300">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Search Results ({scannerResult ? 1 : scannerResults.length})</h4>
+                    <button type="button" onClick={() => { setScannerResult(null); setScannerResults([]); }} className="text-slate-500 hover:text-slate-300">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  
+                  <div className="grid gap-3">
+                    {(scannerResult ? [scannerResult] : scannerResults).map(record => (
+                      <div key={record.id} className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="text-xs font-bold text-slate-100">{record.name}</div>
+                            <div className="text-[10px] text-slate-500 font-mono">{record.pir || 'No PIR'}</div>
+                          </div>
+                          <div className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-tighter ${
+                            record.status === 'Received' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                          }`}>
+                            {record.status}
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-[10px]">
+                          <div className="flex flex-col">
+                            <span className="text-slate-500 uppercase text-[8px] font-bold tracking-tight">Original Tag</span>
+                            <span className="text-slate-200 font-mono">{record.originalTag || '-'}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-slate-500 uppercase text-[8px] font-bold tracking-tight">Rush Tag</span>
+                            <span className="text-indigo-400 font-mono">{record.rushTag || '-'}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-slate-500 uppercase text-[8px] font-bold tracking-tight">Flight / Dest</span>
+                            <span className="text-slate-200">{record.flightNo} / {record.destination}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-slate-500 uppercase text-[8px] font-bold tracking-tight">Storage Location</span>
+                            <span className="text-slate-200">{record.dispositionLocation || 'Not Assigned'}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2 mt-1 pt-3 border-t border-slate-800/50">
+                          {record.status !== 'Received' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = baggageList.map(b => b.id === record.id ? {
+                                  ...b,
+                                  status: 'Received' as const,
+                                  receivedAt: new Date().toISOString(),
+                                  disposition: 'Storage' as const,
+                                  dispositionLocation: 'LHG Office' as const,
+                                  dispositionUpdatedAt: new Date().toISOString()
+                                } : b);
+                                saveBaggageData(updated);
+                                setScannerResult(updated.find(b => b.id === record.id) || null);
+                                setScannerNotification({ text: 'SUCCESS: Bag marked as RECEIVED.', type: 'success' });
+                              }}
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold transition"
+                            >
+                              Mark Received
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditDialog(record)}
+                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-[10px] font-bold transition border border-slate-700"
+                          >
+                            Open Details
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -3648,7 +3799,7 @@ export default function RushBaggageWizard() {
               <h3 className="font-bold text-slate-100 text-sm">Main Operations Registry</h3>
               <div className="flex flex-wrap gap-1.5">
                 <span className="bg-indigo-950/80 border border-indigo-800/40 text-indigo-400 text-[10px] font-mono px-2 py-0.5 rounded">
-                  {summary.total} Records Found
+                  {summary.filteredRecords} Filtered / {summary.totalRecords} Total
                 </span>
                 <span className="bg-emerald-950/80 border border-emerald-800/40 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded">
                   Arrivals: {summary.arrival}
