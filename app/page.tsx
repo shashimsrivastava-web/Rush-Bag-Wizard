@@ -118,7 +118,8 @@ const DEFAULT_MAPPING_DICTIONARY: DictionaryEntry[] = [
   { field: 'destination', label: 'Destination', aliases: ['dest', 'destination', 'airport', 'dest code', 'station'], isMandatory: false, description: 'Three-letter airport code (e.g. BOM)' },
   { field: 'seal', label: 'Seal', aliases: ['seal', 'seal number', 'seal#', 'seals'], isMandatory: false, description: 'Customs or airline security seal number' },
   { field: 'remarks', label: 'Remarks', aliases: ['remark', 'remarks', 'notes', 'comment', 'comments', 'additional details'], isMandatory: false, description: 'Custom text remarks or instructions' },
-  { field: 'protocol', label: 'Customs Protocol', aliases: ['protocol', 'customs protocol', 'disposition protocol', 'ops protocol', 'workflow protocol'], isMandatory: true, description: 'Cleared Baggage or Non-Cleared / Other' }
+  { field: 'protocol', label: 'Customs Protocol', aliases: ['protocol', 'customs protocol', 'disposition protocol', 'ops protocol', 'workflow protocol'], isMandatory: true, description: 'Cleared Baggage or Non-Cleared / Other' },
+  { field: 'receivedAt', label: 'Date of Baggage Receipt', aliases: ['receipt date', 'registration date', 'date received', 'arrival date', 'received date', 'receipt'], isMandatory: false, description: 'Date and time the baggage was received' }
 ];
 
 const DEFAULT_LOCK_DICTIONARY: Record<string, string> = {
@@ -426,6 +427,11 @@ export default function RushBaggageWizard() {
     value?: string;
   }>({ type: 'all' });
 
+  // Advanced Filters
+  const [filterFlights, setFilterFlights] = useState<string[]>([]);
+  const [filterDateRange, setFilterDateRange] = useState<{ type: 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'prevMonth' | 'custom'; from?: string; to?: string }>({ type: 'all' });
+  const [filterRegistry, setFilterRegistry] = useState<'Arrival' | 'Departure' | 'Combined'>('Combined');
+
   // Quick scan inputs & barcode scanning
   const [scannerInput, setScannerInput] = useState('');
   const [scannerNotification, setScannerNotification] = useState<{
@@ -454,6 +460,7 @@ export default function RushBaggageWizard() {
     destination: '',
     remarks: '',
     storageRemarks: '',
+    receivedAt: new Date().toISOString(),
     status: 'Expected',
     customsStatus: 'Pending',
     disposition: 'Pending',
@@ -548,9 +555,9 @@ export default function RushBaggageWizard() {
         return next;
       });
     } else if (scannerTargetField === 'originalTag') {
-      setNewBag(prev => ({ ...prev, originalTag: barcode }));
+      setNewBag(prev => ({ ...prev, originalTag: barcode, receivedAt: new Date().toISOString() }));
     } else if (scannerTargetField === 'rushTag') {
-      setNewBag(prev => ({ ...prev, rushTag: barcode }));
+      setNewBag(prev => ({ ...prev, rushTag: barcode, receivedAt: new Date().toISOString() }));
     }
   };
 
@@ -690,7 +697,13 @@ export default function RushBaggageWizard() {
     const storedData = localStorage.getItem('rbw_baggage_list');
     if (storedData) {
       try {
-        setBaggageList(JSON.parse(storedData));
+        const parsed = JSON.parse(storedData) as BaggageRecord[];
+        // Data Migration: Ensure receivedAt is present
+        const migrated = parsed.map(b => ({
+          ...b,
+          receivedAt: b.receivedAt || b.createdAt
+        }));
+        setBaggageList(migrated);
       } catch (e) {
         setBaggageList(INITIAL_MOCK_DATA);
       }
@@ -908,6 +921,19 @@ export default function RushBaggageWizard() {
     const canonicalOriginalTag = getCanonicalTag(newBag.originalTag || '', iataAirlineMap);
     const canonicalRushTag = getCanonicalTag(newBag.rushTag || '', iataAirlineMap);
 
+    const duplicate = baggageList.find(b => 
+      (canonicalOriginalTag && b.originalTag === canonicalOriginalTag) ||
+      (canonicalRushTag && b.rushTag === canonicalRushTag)
+    );
+
+    if (duplicate) {
+      if (confirm(`A duplicate record already exists (PIR: ${duplicate.pir}, Name: ${duplicate.name}). Delete the existing record and add this one instead?`)) {
+        setBaggageList(prev => prev.filter(b => b.id !== duplicate.id));
+      } else {
+        return;
+      }
+    }
+
     const createdRecord: BaggageRecord = {
       id: `bag-${Date.now()}`,
       sno: (baggageList.length + 1).toString(), // Auto-assign sno, remove from form
@@ -922,7 +948,7 @@ export default function RushBaggageWizard() {
       remarks: newBag.remarks || 'Additional manually registered bag',
       storageRemarks: newBag.storageRemarks || '',
       status: newBag.status as 'Expected' | 'Received',
-      receivedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
+      receivedAt: newBag.receivedAt || (newBag.status === 'Received' ? new Date().toISOString() : undefined),
       customsStatus: (newBag.customsStatus || 'Pending') as BaggageRecord['customsStatus'],
       customsReason: (newBag.customsStatus === 'Not Cleared' ? newBag.customsReason : '') as BaggageRecord['customsReason'],
       customsUpdatedAt: newBag.status === 'Received' ? new Date().toISOString() : undefined,
@@ -985,6 +1011,32 @@ export default function RushBaggageWizard() {
     setNewBagNonClearedAction('');
     setForwardingRequired(false);
   };
+
+  const findAndResolveDuplicates = () => {
+    const records = baggageList;
+    let found = false;
+    for (let i = 0; i < records.length; i++) {
+        for (let j = i + 1; j < records.length; j++) {
+            const isDuplicate = 
+              (records[i].originalTag && records[i].originalTag === records[j].originalTag) ||
+              (records[i].rushTag && records[i].rushTag === records[j].rushTag);
+            
+            if (isDuplicate) {
+                found = true;
+                if (confirm(`Duplicate found:\n1. PIR: ${records[i].pir}, Name: ${records[i].name}, Tag: ${records[i].originalTag || records[i].rushTag}\n2. PIR: ${records[j].pir}, Name: ${records[j].name}, Tag: ${records[j].originalTag || records[j].rushTag}\n\nDelete the first one?`)) {
+                    setBaggageList(prev => prev.filter(b => b.id !== records[i].id));
+                    return; 
+                } else if (confirm(`Delete the second one?`)) {
+                    setBaggageList(prev => prev.filter(b => b.id !== records[j].id));
+                    return;
+                }
+            }
+        }
+    }
+    if (!found) {
+        alert('No duplicates found!');
+    }
+  }
 
   // Parses a string with potential delimiters (spaces, commas, tabs, newlines) into individual tags
   const parseBulkInput = (text: string): string[] => {
@@ -1083,7 +1135,7 @@ export default function RushBaggageWizard() {
         remarks: `Bulk registered during session (${new Date().toLocaleDateString()})`,
         storageRemarks: '',
         status: bulkStatus,
-        receivedAt: isReceived ? new Date().toISOString() : undefined,
+        receivedAt: newBag.receivedAt || (isReceived ? new Date().toISOString() : undefined),
         customsStatus: 'Pending',
         customsUpdatedAt: isReceived ? new Date().toISOString() : undefined,
         disposition: isReceived ? 'Storage' : 'Pending',
@@ -1614,6 +1666,7 @@ export default function RushBaggageWizard() {
       const sealVal = getVal('seal');
       const remarksVal = getVal('remarks', 'Imported via Intelligent Importer');
       const protocolRaw = getVal('protocol');
+      const receivedAtRaw = getVal('receivedAt');
 
       // Row Validation
       if (!nameVal && !pirVal && !originalTagVal && !rushTagVal) {
@@ -1714,6 +1767,7 @@ export default function RushBaggageWizard() {
         destination: destVal.toUpperCase() || 'BOM',
         remarks: remarksVal,
         status: 'Expected',
+        receivedAt: receivedAtRaw ? new Date(receivedAtRaw).toISOString() : new Date().toISOString(),
         customsStatus: 'Pending',
         disposition: 'Pending',
         createdAt: new Date().toISOString(),
@@ -1841,7 +1895,9 @@ export default function RushBaggageWizard() {
   const handleClearFilters = () => {
     setActiveFilter({ type: 'all' });
     setSearchTerm('');
-    setFlightFilter('ALL');
+    setFilterFlights([]);
+    setFilterDateRange({ type: 'all' });
+    setFilterRegistry('Combined');
   };
 
   // Filter records based on current search term, flight select, and active bento dashboard button
@@ -1857,13 +1913,54 @@ export default function RushBaggageWizard() {
         item.remarks.toLowerCase().includes(searchLower) ||
         item.destination.toLowerCase().includes(searchLower);
 
-      // 2. Flight select matches
-      const matchesFlight = flightFilter === 'ALL' || item.flightNo === flightFilter;
+      // 2. Flight select matches (Enhanced)
+      const matchesFlight = filterFlights.length === 0 || filterFlights.some(f => 
+        item.flightNo.toLowerCase().includes(f.toLowerCase())
+      );
 
-      // Filter by registry type
-      const matchesRegistry = activeRegistry === 'Combined' || item.registryType === activeRegistry;
+      // 3. Registry Filter matches
+      const matchesRegistry = filterRegistry === 'Combined' || item.registryType === filterRegistry;
 
-      // 3. Bento Dashboard buttons filter
+      // 4. Date Range matches (Enhanced)
+      let matchesDate = true;
+      if (filterDateRange.type !== 'all' && item.receivedAt) {
+        const receiptDate = new Date(item.receivedAt);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const itemDay = new Date(receiptDate);
+        itemDay.setHours(0, 0, 0, 0);
+
+        if (filterDateRange.type === 'today') {
+          matchesDate = itemDay.getTime() === today.getTime();
+        } else if (filterDateRange.type === 'yesterday') {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          matchesDate = itemDay.getTime() === yesterday.getTime();
+        } else if (filterDateRange.type === 'last7') {
+          const last7 = new Date(today);
+          last7.setDate(last7.getDate() - 7);
+          matchesDate = itemDay >= last7;
+        } else if (filterDateRange.type === 'last30') {
+          const last30 = new Date(today);
+          last30.setDate(last30.getDate() - 30);
+          matchesDate = itemDay >= last30;
+        } else if (filterDateRange.type === 'thisMonth') {
+          matchesDate = receiptDate.getMonth() === today.getMonth() && receiptDate.getFullYear() === today.getFullYear();
+        } else if (filterDateRange.type === 'prevMonth') {
+          const prevMonthDate = new Date(today);
+          prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
+          matchesDate = receiptDate.getMonth() === prevMonthDate.getMonth() && receiptDate.getFullYear() === prevMonthDate.getFullYear();
+        } else if (filterDateRange.type === 'custom' && filterDateRange.from && filterDateRange.to) {
+          const from = new Date(filterDateRange.from);
+          from.setHours(0, 0, 0, 0);
+          const to = new Date(filterDateRange.to);
+          to.setHours(23, 59, 59, 999);
+          matchesDate = receiptDate >= from && receiptDate <= to;
+        }
+      }
+
+      // 5. Bento Dashboard buttons filter (Existing)
       let matchesDashboard = true;
       if (activeFilter.type === 'expected') {
         matchesDashboard = item.status === 'Expected';
@@ -1881,9 +1978,9 @@ export default function RushBaggageWizard() {
         matchesDashboard = item.status === 'Received' && getDaysInStorage(item) >= 3;
       }
 
-      return matchesSearch && matchesFlight && matchesRegistry && matchesDashboard;
+      return matchesSearch && matchesFlight && matchesRegistry && matchesDate && matchesDashboard;
     });
-  }, [baggageList, searchTerm, flightFilter, activeRegistry, activeFilter, getDaysInStorage]);
+  }, [baggageList, searchTerm, filterFlights, filterDateRange, filterRegistry, activeFilter, getDaysInStorage]);
 
   // Alert list computed property
   const activeAlerts = useMemo(() => {
@@ -1905,6 +2002,38 @@ export default function RushBaggageWizard() {
       totalAlerts: list3Day.length + list5Day.length
     };
   }, [baggageList, getDaysInStorage]);
+
+  // Results Summary
+  const summary = useMemo(() => {
+    const total = filteredBaggage.length;
+    const arrival = filteredBaggage.filter(b => b.registryType === 'Arrival').length;
+    const departure = filteredBaggage.filter(b => b.registryType === 'Departure').length;
+    return { total, arrival, departure };
+  }, [filteredBaggage]);
+
+  // Export to Excel
+  const exportToExcel = () => {
+    const worksheet = XLSX.utils.json_to_sheet(filteredBaggage.map(r => ({
+      'Registry Type': r.registryType,
+      'Flight No': r.flightNo,
+      'Date of Receipt': r.receivedAt ? new Date(r.receivedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '',
+      'Date Arrived': r.createdAt,
+      'Original Tag': r.originalTag,
+      'Rush Tag': r.rushTag,
+      'Passenger Name': r.name,
+      'PIR': r.pir,
+      'Weight': r.weight,
+      'Locked': r.ln,
+      'Damaged': r.damaged,
+      'Disposition': r.disposition,
+      'Storage Location': r.dispositionLocation,
+      'Status': r.status,
+      'Remarks': r.remarks,
+    })));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Baggage Report');
+    XLSX.writeFile(workbook, `Baggage_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
 
   // Force trigger demo backdate
   const forceBackdateForAlert = (id: string, daysAgo: number) => {
@@ -2437,6 +2566,12 @@ export default function RushBaggageWizard() {
             {/* Storage Locations counters */}
             <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Live Storage & Warehouse Audits</h3>
+              <button 
+                onClick={findAndResolveDuplicates}
+                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-indigo-300 px-2 py-1 rounded mb-3 cursor-pointer"
+              >
+                Check Duplicates
+              </button>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 {(Object.keys(stats.locations) as Array<keyof typeof stats.locations>).map(locName => {
                   const isSelected = activeFilter.type === 'location' && activeFilter.value === locName;
@@ -2656,13 +2791,24 @@ export default function RushBaggageWizard() {
 
                       {/* 4. Name */}
                       <div className="md:col-span-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase">Passenger Full Name</label>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Passenger Name</label>
                         <input
                           type="text"
                           placeholder="LASTNAME FIRSTNAME"
                           value={newBag.name}
                           onChange={(e) => setNewBag({...newBag, name: e.target.value})}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs"
+                        />
+                      </div>
+
+                      {/* Date of Receipt */}
+                      <div className="md:col-span-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Receipt Date *</label>
+                        <input
+                          type="datetime-local"
+                          value={newBag.receivedAt ? new Date(new Date(newBag.receivedAt).getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ''}
+                          onChange={(e) => setNewBag({...newBag, receivedAt: e.target.value ? new Date(e.target.value).toISOString() : undefined})}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
                         />
                       </div>
 
@@ -3500,33 +3646,98 @@ export default function RushBaggageWizard() {
           <div className="p-5 border-b border-slate-800 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 bg-slate-900/80">
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
               <h3 className="font-bold text-slate-100 text-sm">Main Operations Registry</h3>
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 <span className="bg-indigo-950/80 border border-indigo-800/40 text-indigo-400 text-[10px] font-mono px-2 py-0.5 rounded">
-                  Showing {filteredBaggage.length} of {baggageList.length} bags
+                  {summary.total} Records Found
                 </span>
-                {activeFilter.type !== 'all' && (
-                  <span className="bg-amber-950/80 border border-amber-800/40 text-amber-400 text-[10px] font-mono px-2 py-0.5 rounded capitalize">
-                    Filter: {activeFilter.type === 'location' ? `Location: ${activeFilter.value}` : activeFilter.type}
-                  </span>
-                )}
+                <span className="bg-emerald-950/80 border border-emerald-800/40 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded">
+                  Arrivals: {summary.arrival}
+                </span>
+                <span className="bg-amber-950/80 border border-amber-800/40 text-amber-400 text-[10px] font-mono px-2 py-0.5 rounded">
+                  Departures: {summary.departure}
+                </span>
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              {/* Flight filter dropdown */}
+              <button
+                onClick={exportToExcel}
+                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3 py-1.5 rounded cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export Excel
+              </button>
+              {/* Registry filter dropdown */}
               <div className="flex items-center gap-1.5">
                 <Filter className="w-3.5 h-3.5 text-slate-400" />
                 <select
-                  value={flightFilter}
-                  onChange={(e) => setFlightFilter(e.target.value)}
+                  value={filterRegistry}
+                  onChange={(e) => setFilterRegistry(e.target.value as any)}
                   className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded px-2.5 py-1.5 focus:border-indigo-500"
                 >
-                  <option value="ALL">All Flight Ops</option>
-                  <option value="LH760">LH760</option>
-                  <option value="LH762">LH762</option>
-                  <option value="LX146">LX146</option>
-                  <option value="LX2646">LX2646</option>
+                  <option value="Combined">Both Registries</option>
+                  <option value="Arrival">Arrival Only</option>
+                  <option value="Departure">Departure Only</option>
                 </select>
+              </div>
+
+              {/* Date Filter */}
+              <div className="flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                <select
+                  value={filterDateRange.type}
+                  onChange={(e) => {
+                    const val = e.target.value as any;
+                    if (val === 'custom') {
+                      setFilterDateRange({ type: 'custom', from: '', to: '' });
+                    } else {
+                      setFilterDateRange({ type: val });
+                    }
+                  }}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded px-2.5 py-1.5 focus:border-indigo-500"
+                >
+                  <option value="all">Any Date</option>
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="last7">Last 7 Days</option>
+                  <option value="last30">Last 30 Days</option>
+                  <option value="thisMonth">This Month</option>
+                  <option value="prevMonth">Previous Month</option>
+                  <option value="custom">Custom Range...</option>
+                </select>
+              </div>
+
+              {filterDateRange.type === 'custom' && (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={filterDateRange.from || ''}
+                    onChange={(e) => setFilterDateRange(prev => ({ ...prev, from: e.target.value }))}
+                    className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] rounded px-2 py-1 focus:border-indigo-500"
+                  />
+                  <span className="text-slate-500 text-[10px]">to</span>
+                  <input
+                    type="date"
+                    value={filterDateRange.to || ''}
+                    onChange={(e) => setFilterDateRange(prev => ({ ...prev, to: e.target.value }))}
+                    className="bg-slate-950 border border-slate-800 text-slate-300 text-[10px] rounded px-2 py-1 focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {/* Flight filter dropdown */}
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Flight(s) e.g. LH, LX154"
+                  value={filterFlights.join(', ')}
+                  onChange={(e) => {
+                    const tokens = e.target.value.split(',').map(t => t.trim()).filter(t => t.length > 0);
+                    setFilterFlights(tokens);
+                  }}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded px-2.5 py-1.5 focus:border-indigo-500 w-40"
+                />
               </div>
 
               {/* Text search */}
@@ -3542,7 +3753,7 @@ export default function RushBaggageWizard() {
               </div>
 
               {/* Clear filters shortcut */}
-              {(searchTerm || flightFilter !== 'ALL' || activeFilter.type !== 'all') && (
+              {(searchTerm || filterFlights.length > 0 || filterDateRange.type !== 'all' || activeFilter.type !== 'all') && (
                 <button
                   onClick={handleClearFilters}
                   className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold flex items-center gap-1 transition"
@@ -3691,6 +3902,7 @@ export default function RushBaggageWizard() {
                       />
                     </th>
                     <th className="py-3 px-3 font-semibold text-slate-300">Flight No</th>
+                    <th className="py-3 px-3 font-semibold text-slate-300">Receipt Date</th>
                     <th className="py-3 px-3">Original Tag</th>
                     <th className="py-3 px-3">Rush Tag</th>
                     <th className="py-3 px-3">Passenger Name</th>
@@ -3733,6 +3945,16 @@ export default function RushBaggageWizard() {
                           <span className="px-2 py-0.5 bg-slate-950 rounded text-indigo-300 border border-slate-800 font-mono font-bold">
                             {record.flightNo}
                           </span>
+                        </td>
+
+                        {/* Date of Receipt */}
+                        <td className="py-3 px-3">
+                          <div className="text-[11px] font-bold text-slate-100 font-mono">
+                            {record.receivedAt ? new Date(record.receivedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase().replace(/ /g, '-') : '-'}
+                          </div>
+                          <div className="text-[9px] text-slate-500 font-mono">
+                            {record.receivedAt ? new Date(record.receivedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }) : ''}
+                          </div>
                         </td>
 
                         {/* 2. Original Tag */}
@@ -4772,6 +4994,18 @@ export default function RushBaggageWizard() {
                   <div>Rush Tag: <strong className="text-indigo-400 font-mono">{editingRecord.rushTag || '-'}</strong></div>
                   <div>Flight Ops: <strong className="text-slate-100 font-mono">{editingRecord.flightNo}</strong></div>
                   <div>Destination: <strong className="text-slate-100 font-mono">{editingRecord.destination}</strong></div>
+                  <div className="col-span-2 mt-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Date of Baggage Receipt (Manual Override)</label>
+                    <input
+                      type="datetime-local"
+                      value={editingRecord.receivedAt ? new Date(new Date(editingRecord.receivedAt).getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ''}
+                      onChange={(e) => setEditingRecord({
+                        ...editingRecord,
+                        receivedAt: e.target.value ? new Date(e.target.value).toISOString() : undefined
+                      })}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
+                    />
+                  </div>
                 </div>
               </div>
 
