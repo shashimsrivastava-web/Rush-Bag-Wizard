@@ -34,7 +34,8 @@ import {
   HelpCircle,
   RefreshCw,
   Settings,
-  Camera
+  Camera,
+  Keyboard
 } from 'lucide-react';
 
 import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
@@ -122,15 +123,15 @@ interface DictionaryEntry {
 }
 
 const DEFAULT_MAPPING_DICTIONARY: DictionaryEntry[] = [
-  { field: 'flightNo', label: 'Flight No', aliases: ['flight no', 'flight number', 'flight#', 'flight', 'flt', 'flt no', 'fltno', 'carrier'], isMandatory: true, description: 'Carrier flight code (e.g. LH760)' },
-  { field: 'originalTag', label: 'Original Tag', aliases: ['original tag', 'original bag tag', 'orig tag', 'org tag', 'orignal tag', 'original tga', 'bag tag', 'tag no', 'tag', 'originaltag', 'baggage tag'], isMandatory: false, description: '10-digit primary tag number' },
+  { field: 'flightNo', label: 'Flight No', aliases: ['flight no', 'flight number', 'flight#', 'flight', 'flt', 'flt no', 'fltno', 'carrier', 'outbound flight number'], isMandatory: true, description: 'Carrier flight code (e.g. LH760)' },
+  { field: 'originalTag', label: 'Original Tag', aliases: ['original tag', 'original bag tag', 'orig tag', 'org tag', 'orignal tag', 'original tga', 'bag tag', 'tag no', 'tag', 'originaltag', 'baggage tag', 'bag tag number'], isMandatory: false, description: '10-digit primary tag number' },
   { field: 'rushTag', label: 'Rush Tag', aliases: ['rush tag', 'rushtag', 'rush bag tag', 'r tag', 'rtag', 'expedite tag', 'expedite'], isMandatory: false, description: 'Rush/expedite tag number (e.g. LX920394)' },
   { field: 'name', label: 'Passenger Name', aliases: ['name', 'passenger', 'passenger name', 'pax', 'pax name', 'customer name', 'passengername', 'full name', 'pax fullname'], isMandatory: true, description: 'Passenger full name' },
-  { field: 'pir', label: 'PIR Number', aliases: ['pir', 'pir no', 'pir number', 'pir ref', 'reference', 'pirnumber', 'report number', 'irregularity report'], isMandatory: true, description: 'Property Irregularity Report (e.g. BOMEK12345)' },
+  { field: 'pir', label: 'PIR Number', aliases: ['pir', 'pir no', 'pir number', 'pir ref', 'reference', 'pirnumber', 'report number', 'irregularity report'], isMandatory: true, description: 'Property Irregularity Report (e.g. DELEK12345)' },
   { field: 'weight', label: 'Weight (kg)', aliases: ['weight', 'wt', 'kg', 'kgs', 'weight kg', 'bag weight'], isMandatory: false, description: 'Baggage weight in kilograms (leave blank if not mentioned)' },
   { field: 'damaged', label: 'Damaged', aliases: ['damage', 'damaged', 'dmg', 'damage yn', 'condition', 'is damaged'], isMandatory: true, description: 'Damaged indicator (Y/N)' },
   { field: 'ln', label: 'Locked', aliases: ['locked', 'lock', 'l/n', 'ln', 'lock status', 'locked status', 'l.n'], isMandatory: false, description: 'Locked indicator (free text such as PAD, CL, Y, N)' },
-  { field: 'destination', label: 'Destination', aliases: ['dest', 'destination', 'airport', 'dest code', 'station'], isMandatory: false, description: 'Three-letter airport code (e.g. BOM)' },
+  { field: 'destination', label: 'Destination', aliases: ['dest', 'destination', 'airport', 'dest code', 'station'], isMandatory: false, description: 'Three-letter airport code (e.g. DEL)' },
   { field: 'seal', label: 'Seal', aliases: ['seal', 'seal number', 'seal#', 'seals'], isMandatory: false, description: 'Customs or airline security seal number' },
   { field: 'remarks', label: 'Remarks', aliases: ['remark', 'remarks', 'notes', 'comment', 'comments', 'additional details'], isMandatory: false, description: 'Custom text remarks or instructions' },
   { field: 'protocol', label: 'Customs Protocol', aliases: ['protocol', 'customs protocol', 'disposition protocol', 'ops protocol', 'workflow protocol'], isMandatory: true, description: 'Cleared Baggage or Non-Cleared / Other' },
@@ -179,14 +180,14 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
   {
     id: 'bag-1',
     sno: '1',
-    pir: 'BOM_LX_10294',
+    pir: 'FRA_LX_10294',
     name: 'MUELLER HANS',
     originalTag: '0724102943',
     rushTag: 'LX920394',
     flightNo: 'LH760',
     seal: 'S-40192',
     ln: 'L02',
-    destination: 'BOM',
+    destination: 'FRA',
     remarks: 'Rush priority passenger connection bag',
     storageRemarks: '',
     status: 'Expected',
@@ -222,14 +223,14 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
   {
     id: 'bag-3',
     sno: '3',
-    pir: 'BOM_LX_88201',
+    pir: 'FRA_LX_88201',
     name: 'ALMEIDA RAHUL',
     originalTag: '0724882015',
     rushTag: 'LX920399',
     flightNo: 'LX146',
     seal: 'S-40221',
     ln: 'L08',
-    destination: 'BOM',
+    destination: 'FRA',
     remarks: 'Direct delivery',
     storageRemarks: '',
     status: 'Received',
@@ -269,14 +270,14 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
   {
     id: 'bag-5',
     sno: '5',
-    pir: 'BOM_LX_55212',
+    pir: 'FRA_LX_55212',
     name: 'MEHTA SNEHA',
     originalTag: '0724552120',
     rushTag: '',
     flightNo: 'LH760',
     seal: 'S-40502',
     ln: 'L01',
-    destination: 'BOM',
+    destination: 'FRA',
     remarks: 'Needs immediate processing',
     storageRemarks: '',
     status: 'Expected',
@@ -288,14 +289,14 @@ const INITIAL_MOCK_DATA: BaggageRecord[] = [
   {
     id: 'bag-6',
     sno: '6',
-    pir: 'BOM_LX_77192',
+    pir: 'FRA_LX_77192',
     name: 'KHAN ARMAAN',
     originalTag: '0724771922',
     rushTag: 'LX920555',
     flightNo: 'LH762',
     seal: 'S-40510',
     ln: 'L03',
-    destination: 'BOM',
+    destination: 'FRA',
     remarks: 'Disposed old bag - test auto-purge',
     storageRemarks: '',
     status: 'Received',
@@ -447,6 +448,7 @@ export default function RushBaggageWizard() {
   const [filterFlights, setFilterFlights] = useState<string[]>([]);
   const [filterDateRange, setFilterDateRange] = useState<{ type: 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'prevMonth' | 'custom'; from?: string; to?: string }>({ type: 'all' });
   const [filterRegistry, setFilterRegistry] = useState<'Arrival' | 'Departure' | 'Combined'>('Combined');
+  const [filterRemarks, setFilterRemarks] = useState('');
 
   // Intelligent Scanner States
   const [scannerResult, setScannerResult] = useState<BaggageRecord | null>(null);
@@ -536,7 +538,7 @@ export default function RushBaggageWizard() {
   };
 
   // Bulk Add Session States
-  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [isBulkMode, setIsBulkMode] = useState(true);
   const [bulkTagsInput, setBulkTagsInput] = useState('');
   const [bulkProtocol, setBulkProtocol] = useState<'Cleared Baggage' | 'Non-Cleared / Other' | ''>('');
   const [bulkClearedAction, setBulkClearedAction] = useState<string>('');
@@ -659,6 +661,9 @@ export default function RushBaggageWizard() {
   const [rawPasteText, setRawPasteText] = useState('');
   const [importPreview, setImportPreview] = useState<BaggageRecord[]>([]);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showSBHImportDialog, setShowSBHImportDialog] = useState(false);
+  const [showSBHInstructions, setShowSBHInstructions] = useState(false);
+  const [isSBHImport, setIsSBHImport] = useState(false);
 
   // Intelligent Importer States
   const [mappingDictionary, setMappingDictionary] = useState<DictionaryEntry[]>(DEFAULT_MAPPING_DICTIONARY);
@@ -671,9 +676,11 @@ export default function RushBaggageWizard() {
   const [importWizardStep, setImportWizardStep] = useState<'upload' | 'mapping' | 'preview' | 'summary'>('upload');
   const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
   const [excelRows, setExcelRows] = useState<any[][]>([]);
+  const [filesProcessedCount, setFilesProcessedCount] = useState<number>(0);
   const [columnMappings, setColumnMappings] = useState<Record<number, { systemField: string, confidence: number, matchedBy: 'header' | 'semantic' | 'manual' }>>({});
   const [duplicateMode, setDuplicateMode] = useState<'skip' | 'update' | 'new'>('skip');
   const [importProgress, setImportProgress] = useState<number | null>(null);
+  const [importProgressMessage, setImportProgressMessage] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [importSummaryResult, setImportSummaryResult] = useState<{
     totalRows: number,
@@ -685,7 +692,8 @@ export default function RushBaggageWizard() {
     invalidWeights: number,
     recognizedLocks: number,
     unrecognizedLocks: number,
-    warnings: string[]
+    warnings: string[],
+    filesProcessed?: number
   } | null>(null);
 
   const [newAliasField, setNewAliasField] = useState<string>('');
@@ -892,7 +900,7 @@ export default function RushBaggageWizard() {
 
     // 1. Detect Search Type
     const isLikelyTag = /^\d{10}$/.test(query) || /^[A-Z]{2}\d+$/.test(query) || /^\d+$/.test(query);
-    const isLikelyPIR = /^[A-Z]{3}[A-Z]{2}\d{5}$/.test(query); // e.g. BOMEK12345
+    const isLikelyPIR = /^[A-Z]{3}[A-Z]{2}\d{5}$/.test(query); // e.g. DELEK12345
     
     let type: 'tag' | 'pir' | 'name' = 'name';
     if (isLikelyTag) type = 'tag';
@@ -1047,7 +1055,7 @@ export default function RushBaggageWizard() {
       flightNo: 'LH760',
       seal: '',
       ln: 'No',
-      destination: 'BOM',
+      destination: '',
       remarks: '',
       storageRemarks: '',
       status: 'Expected',
@@ -1188,7 +1196,7 @@ export default function RushBaggageWizard() {
         flightNo: bulkFlightNo,
         seal: bulkSeal.toUpperCase(),
         ln: bulkLn,
-        destination: registrationContext === 'arrival' ? (bulkDestination.toUpperCase() || 'BOM') : bulkForwardingDestination.toUpperCase(),
+        destination: registrationContext === 'arrival' ? bulkDestination.toUpperCase() : bulkForwardingDestination.toUpperCase(),
         remarks: registrationContext === 'arrival' ? `Bulk registered during session (${new Date().toLocaleDateString()})` : '',
         storageRemarks: registrationContext === 'arrival' ? '' : bulkForwardingRemarks,
         status: bulkStatus,
@@ -1639,7 +1647,24 @@ export default function RushBaggageWizard() {
       // 3. For each column, find best mapping field
       const mappings: Record<number, { systemField: string, confidence: number, matchedBy: 'header' | 'semantic' | 'manual' }> = {};
       
-      for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+      if (isSBHImport) {
+        // SBH FIXED PROFILE MAPPING - ONLY 4 FIELDS
+        for (let colIdx = 0; colIdx < headers.length; colIdx++) {
+          const headerVal = headers[colIdx].trim().toLowerCase();
+          let systemField = 'ignore';
+
+          if (headerVal === 'bag tag number') systemField = 'originalTag';
+          else if (headerVal === 'pax') systemField = 'name';
+          else if (headerVal === 'outbound flight number') systemField = 'flightNo';
+
+          mappings[colIdx] = {
+            systemField,
+            confidence: systemField !== 'ignore' ? 100 : 0,
+            matchedBy: 'header'
+          };
+        }
+      } else {
+        for (let colIdx = 0; colIdx < headers.length; colIdx++) {
         const headerVal = headers[colIdx];
         const cleanHeader = headerVal.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -1704,7 +1729,7 @@ export default function RushBaggageWizard() {
             // Rush Tag (8-12 digits or alphanumeric e.g. LX920394)
             if (/^[A-Z]{2}\d{5,8}$/i.test(val) || (/^[A-Z0-9]+$/i.test(val) && val.length >= 6 && val.length <= 12 && !/^\d+$/.test(val))) matchStats.rushTag++;
             
-            // PIR Number (e.g. BOMEK12345 or BOM_LX_10294)
+            // PIR Number (e.g. DELEK12345 or DEL_LX_10294)
             if (/^[A-Z]{3}_?[A-Z]{2}_?\d{4,6}$/i.test(val)) matchStats.pir++;
             
             // Weight (decimal or float)
@@ -1770,6 +1795,7 @@ export default function RushBaggageWizard() {
           matchedBy: bestMatchedBy
         };
       }
+    }
 
       setExcelHeaders(headers);
       setExcelRows(dataRows);
@@ -1828,7 +1854,7 @@ export default function RushBaggageWizard() {
       const weightRaw = getVal('weight');
       const damagedRaw = getVal('damaged', 'N');
       const lockedRaw = getVal('ln', '');
-      const destVal = getVal('destination', 'BOM');
+      const destVal = getVal('destination', '');
       const sealVal = getVal('seal');
       const remarksVal = getVal('remarks', 'Imported via Intelligent Importer');
       const protocolRaw = getVal('protocol');
@@ -1914,7 +1940,45 @@ export default function RushBaggageWizard() {
       // Validate flight numbers to default options
       const allowedFlights = ['LH760', 'LH762', 'LX146', 'LX2646'];
       let finalFlight = '';
-      if (flightVal) {
+      let sbhReceiptDate: string | undefined = undefined;
+      let sbhDestination: string | undefined = undefined;
+
+      if (isSBHImport && flightVal && flightVal.includes('/')) {
+        // SBH Format: LH760/06JUL DEL→BOM
+        try {
+          const parts = flightVal.split('/');
+          finalFlight = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+          
+          if (parts.length > 1) {
+            const rest = parts[1].trim();
+            const restParts = rest.split(/\s+/);
+            const dateStrRaw = restParts[0]; // e.g. "06JUL"
+            
+            // Extract route (e.g. "DEL→BOM")
+            if (restParts.length > 1) {
+              const route = restParts[1];
+              // Support both → and -> 
+              const arrow = route.includes('→') ? '→' : '->';
+              if (route.includes(arrow)) {
+                sbhDestination = route.split(arrow)[0].trim().toUpperCase();
+              }
+            }
+
+            // Parse date (e.g. "06JUL")
+            // We'll append current year
+            const currentYear = new Date().getFullYear();
+            const d = new Date(`${dateStrRaw} ${currentYear}`);
+            if (!isNaN(d.getTime())) {
+              sbhReceiptDate = d.toISOString();
+            } else {
+              warningList.push(`Row ${rIdx + 1}: Failed to parse SBH date "${dateStrRaw}". Using current date.`);
+            }
+          }
+        } catch (err) {
+          warningList.push(`Row ${rIdx + 1}: Error parsing SBH flight field: ${flightVal}. Using defaults.`);
+          finalFlight = flightVal.split('/')[0].trim();
+        }
+      } else if (flightVal) {
         const cleanedFlight = flightVal.toUpperCase().replace(/\s+/g, '');
         const found = allowedFlights.find(f => cleanedFlight.includes(f) || cleanedFlight === f);
         finalFlight = found || flightVal;
@@ -1923,34 +1987,34 @@ export default function RushBaggageWizard() {
       const candidate: BaggageRecord = {
         id: `bag-i-${Date.now()}-${rIdx}-${Math.floor(Math.random() * 1000)}`,
         sno: getVal('sno') || (baggageList.length + newImportedRecords.length + 1).toString(),
-        pir: finalPir.toUpperCase(),
+        pir: isSBHImport ? '' : finalPir.toUpperCase(),
         name: finalName.toUpperCase(),
         originalTag: originalTagVal,
-        rushTag: rushTagVal.toUpperCase(),
+        rushTag: isSBHImport ? '' : rushTagVal.toUpperCase(),
         flightNo: finalFlight,
-        seal: sealVal.toUpperCase(),
-        ln: finalLocked,
-        destination: destVal.toUpperCase() || 'BOM',
-        remarks: remarksVal,
+        seal: isSBHImport ? '' : sealVal.toUpperCase(),
+        ln: isSBHImport ? '' : finalLocked,
+        destination: isSBHImport ? (sbhDestination || '') : destVal.toUpperCase(),
+        remarks: isSBHImport ? 'SBH Import' : remarksVal,
         status: 'Expected',
-        receivedAt: receivedAtRaw ? new Date(receivedAtRaw).toISOString() : new Date().toISOString(),
+        receivedAt: sbhReceiptDate || (receivedAtRaw ? new Date(receivedAtRaw).toISOString() : new Date().toISOString()),
         customsStatus: 'Pending',
         disposition: 'Pending',
         createdAt: new Date().toISOString(),
-        weight: parsedWeight,
-        damaged: finalDamaged,
-        protocol: finalProtocol,
-        deliveryAgent: finalProtocol === 'Cleared Baggage' ? 'VVM' : undefined,
-        storageOption: finalProtocol === 'Cleared Baggage' ? 'Standard Warehousing – LHG Office' : undefined,
-        domesticForwarding: finalProtocol === 'Cleared Baggage' ? 'No Forwarding' : undefined,
-        arrivalBelt: finalProtocol === 'Non-Cleared / Other' ? 'Arrival Belt 9' : undefined,
-        handoverOption: finalProtocol === 'Non-Cleared / Other' ? 'Partner Airlines' : undefined,
-        warehouseOption: finalProtocol === 'Non-Cleared / Other' ? 'CWC Warehouse' : undefined,
-        reexportOption: finalProtocol === 'Non-Cleared / Other' ? 'Re-export to Carrier Hub' : undefined,
+        weight: isSBHImport ? undefined : parsedWeight,
+        damaged: isSBHImport ? undefined : finalDamaged,
+        protocol: isSBHImport ? '' : finalProtocol,
+        deliveryAgent: (!isSBHImport && finalProtocol === 'Cleared Baggage') ? 'VVM' : undefined,
+        storageOption: (!isSBHImport && finalProtocol === 'Cleared Baggage') ? 'Standard Warehousing – LHG Office' : undefined,
+        domesticForwarding: (!isSBHImport && finalProtocol === 'Cleared Baggage') ? 'No Forwarding' : undefined,
+        arrivalBelt: (!isSBHImport && finalProtocol === 'Non-Cleared / Other') ? 'Arrival Belt 9' : undefined,
+        handoverOption: (!isSBHImport && finalProtocol === 'Non-Cleared / Other') ? 'Partner Airlines' : undefined,
+        warehouseOption: (!isSBHImport && finalProtocol === 'Non-Cleared / Other') ? 'CWC Warehouse' : undefined,
+        reexportOption: (!isSBHImport && finalProtocol === 'Non-Cleared / Other') ? 'Re-export to Carrier Hub' : undefined,
         registryType: activeRegistry === 'Combined' ? 'Arrival' : activeRegistry
       };
 
-      // Check Duplicates against existing local baggage records
+      // Check Duplicates against existing local baggage records AND within the current import batch
       const isDuplicateInDb = baggageList.find(item => {
         if (candidate.pir && candidate.pir !== 'NO PIR' && item.pir === candidate.pir) return true;
         if (candidate.originalTag && item.originalTag === candidate.originalTag) return true;
@@ -1958,12 +2022,27 @@ export default function RushBaggageWizard() {
         return false;
       });
 
-      if (isDuplicateInDb) {
+      const isDuplicateInBatch = newImportedRecords.find(item => {
+        if (candidate.pir && candidate.pir !== 'NO PIR' && item.pir === candidate.pir) return true;
+        if (candidate.originalTag && item.originalTag === candidate.originalTag) return true;
+        if (candidate.rushTag && item.rushTag === candidate.rushTag) return true;
+        return false;
+      });
+
+      if (isDuplicateInDb || isDuplicateInBatch) {
         duplicateCount++;
+        
+        // Internal batch duplicates are always skipped (only import first occurrence)
+        if (isDuplicateInBatch) {
+          skippedCount++;
+          warningList.push(`Row ${rIdx + 1}: Duplicate tag "${candidate.originalTag || candidate.rushTag}" found across selected files. Record skipped.`);
+          return;
+        }
+
         if (duplicateMode === 'skip') {
           skippedCount++;
           return; // Skip importing this row
-        } else if (duplicateMode === 'update') {
+        } else if (duplicateMode === 'update' && isDuplicateInDb) {
           // Merge properties and update the existing list
           updatedCount++;
           const idxToUpdate = baggageList.findIndex(x => x.id === isDuplicateInDb.id);
@@ -1977,7 +2056,7 @@ export default function RushBaggageWizard() {
               damaged: candidate.damaged,
               ln: candidate.ln,
               seal: candidate.seal || baggageList[idxToUpdate].seal,
-              remarks: candidate.remarks || baggageList[idxToUpdate].remarks
+              remarks: (candidate.remarks || baggageList[idxToUpdate].remarks) + " (Updated via Import)"
             };
           }
           return;
@@ -2003,12 +2082,14 @@ export default function RushBaggageWizard() {
       invalidWeights: invalidWeightCount,
       recognizedLocks: recognizedLockCount,
       unrecognizedLocks: unrecognizedLockCount,
-      warnings: warningList
+      warnings: warningList,
+      filesProcessed: isSBHImport ? filesProcessedCount : undefined
     });
 
     // Clear and step forward
     setImportWizardStep('summary');
     setImportProgress(null);
+    setImportProgressMessage('');
   };
 
   // Paste Text process initiation
@@ -2019,41 +2100,123 @@ export default function RushBaggageWizard() {
   };
 
   // Uploaded spreadsheet handler (Excel, CSV, TXT)
-  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleCSVUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    const fileName = file.name.toLowerCase();
+    setShowImportDialog(true);
+    setIsAnalyzing(true);
+    setImportProgress(0);
+    
+    let combinedRows: any[][] = [];
+    let firstHeaders: string[] = [];
+    let totalRowsProcessed = 0;
+    const warningList: string[] = [];
 
-    if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) {
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        try {
-          const result = evt.target?.result;
-          if (!result) return;
-          const data = new Uint8Array(result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
+    const fileList = Array.from(files);
+    setFilesProcessedCount(fileList.length);
+    
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      const fileName = file.name.toLowerCase();
+      setImportProgress(Math.round(((i) / fileList.length) * 100));
+      setImportProgressMessage(`Reading file ${i + 1} of ${fileList.length}: ${file.name}`);
+
+      try {
+        const grid = await new Promise<any[][]>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            try {
+              const result = evt.target?.result;
+              if (!result) {
+                resolve([]);
+                return;
+              }
+              const data = new Uint8Array(result as ArrayBuffer);
+              const workbook = XLSX.read(data, { type: 'array' });
+              const firstSheetName = workbook.SheetNames[0];
+              const worksheet = workbook.Sheets[firstSheetName];
+              const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+              resolve(rows);
+            } catch (err) {
+              reject(err);
+            }
+          };
+          reader.onerror = reject;
+          if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) {
+            reader.readAsArrayBuffer(file);
+          } else {
+            // Fallback for non-excel (e.g. CSV)
+            const textReader = new FileReader();
+            textReader.onload = (evt) => {
+              const text = evt.target?.result as string;
+              if (!text) { resolve([]); return; }
+              const parsed = parsePastedGrid(text);
+              resolve(parsed);
+            };
+            textReader.onerror = reject;
+            textReader.readAsText(file);
+          }
+        });
+
+        if (grid.length > 0) {
+          // Detect header for THIS file
+          let headerRowIdx = 0;
+          let maxMatches = -1;
+          const scanLimit = Math.min(5, grid.length);
+          for (let r = 0; r < scanLimit; r++) {
+            let matchCount = 0;
+            const row = grid[r];
+            if (!row) continue;
+            row.forEach(cell => {
+              if (!cell) return;
+              const cellStr = String(cell).toLowerCase().trim();
+              const found = mappingDictionary.some(entry => 
+                entry.aliases.some(alias => alias.toLowerCase() === cellStr) ||
+                entry.aliases.some(alias => getSimilarityScore(cellStr, alias) > 0.8)
+              );
+              if (found) matchCount++;
+            });
+            if (matchCount > maxMatches) {
+              maxMatches = matchCount;
+              headerRowIdx = r;
+            }
+          }
+
+          if (i === 0) {
+            firstHeaders = grid[headerRowIdx].map((h, colIdx) => {
+              if (h === null || h === undefined || String(h).trim() === '') {
+                return `Column ${colIdx + 1}`;
+              }
+              return String(h).trim();
+            });
+          }
+
+          const fileDataRows = grid.slice(headerRowIdx + 1).filter(r => 
+            r && r.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '')
+          );
           
-          // Read worksheet rows as raw array of arrays
-          const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
-          analyzeGrid(rows);
-        } catch (err: any) {
-          alert(`Error reading Excel file: ${err.message || err}`);
+          combinedRows.push(...fileDataRows);
+          totalRowsProcessed += fileDataRows.length;
         }
-      };
-      reader.readAsArrayBuffer(file);
+      } catch (err: any) {
+        warningList.push(`Error reading ${file.name}: ${err.message || err}`);
+      }
+    }
+
+    setImportProgress(100);
+    setImportProgressMessage('Analysis complete.');
+    
+    if (combinedRows.length > 0) {
+      // Small delay to let UI update
+      setTimeout(() => {
+        analyzeGrid([firstHeaders, ...combinedRows]);
+      }, 300);
     } else {
-      // Fallback/original behavior for CSV/TXT
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        const text = evt.target?.result as string;
-        if (!text) return;
-        const grid = parsePastedGrid(text);
-        analyzeGrid(grid);
-      };
-      reader.readAsText(file);
+      setIsAnalyzing(false);
+      setImportProgress(null);
+      setImportProgressMessage('');
+      alert('No valid data found in selected files.');
     }
   };
 
@@ -2062,6 +2225,7 @@ export default function RushBaggageWizard() {
     setActiveFilter({ type: 'all' });
     setSearchTerm('');
     setFilterFlights([]);
+    setFilterRemarks('');
     setFilterDateRange({ type: 'all' });
     setFilterRegistry('Combined');
   };
@@ -2144,9 +2308,12 @@ export default function RushBaggageWizard() {
         matchesDashboard = item.status === 'Received' && getDaysInStorage(item) >= 3;
       }
 
-      return matchesSearch && matchesFlight && matchesRegistry && matchesDate && matchesDashboard;
+      // 6. Remarks Filter
+      const matchesRemarks = !filterRemarks || (item.remarks && item.remarks.toLowerCase().includes(filterRemarks.toLowerCase()));
+
+      return matchesSearch && matchesFlight && matchesRegistry && matchesDate && matchesDashboard && matchesRemarks;
     });
-  }, [baggageList, searchTerm, filterFlights, filterDateRange, filterRegistry, activeFilter, getDaysInStorage]);
+  }, [baggageList, searchTerm, filterFlights, filterRemarks, filterDateRange, filterRegistry, activeFilter, getDaysInStorage]);
 
   // Alert list computed property
   const activeAlerts = useMemo(() => {
@@ -2981,15 +3148,6 @@ export default function RushBaggageWizard() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    {registrationContext === 'arrival' && (
-                       <button
-                         onClick={() => setShowImportDialog(true)}
-                         className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 hover:bg-slate-800 text-indigo-400 text-[10px] font-bold px-2 py-1 rounded transition cursor-pointer"
-                       >
-                         <Upload className="w-3 h-3" />
-                         Import BDO Excel
-                       </button>
-                    )}
                     <button onClick={() => setShowAddForm(false)} className="cursor-pointer">
                       <X className="w-4 h-4 text-slate-400 hover:text-slate-200" />
                     </button>
@@ -3000,17 +3158,17 @@ export default function RushBaggageWizard() {
                 <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
                   <button
                     type="button"
-                    onClick={() => setIsBulkMode(false)}
-                    className={`flex-1 py-1.5 text-xs rounded-md font-semibold transition cursor-pointer ${!isBulkMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                  >
-                    Single Bag Registration
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setIsBulkMode(true)}
                     className={`flex-1 py-1.5 text-xs rounded-md font-semibold transition cursor-pointer ${isBulkMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
                   >
                     Bulk Baggage Operations
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkMode(false)}
+                    className={`flex-1 py-1.5 text-xs rounded-md font-semibold transition cursor-pointer ${!isBulkMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    Single Bag Registration
                   </button>
                 </div>
 
@@ -3122,7 +3280,7 @@ export default function RushBaggageWizard() {
                         <label className="text-[10px] font-bold text-slate-400 uppercase">PIR Number</label>
                         <input
                           type="text"
-                          placeholder="e.g. BOM_LX_11029"
+                          placeholder="e.g. DEL_LX_11029"
                           value={newBag.pir}
                           onChange={(e) => setNewBag({...newBag, pir: e.target.value})}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-1.5 rounded text-xs font-mono"
@@ -3693,7 +3851,101 @@ export default function RushBaggageWizard() {
                   </form>
                 ) : (
                   /* BULK BAGGAGE OPERATIONS MODE */
-                  <form onSubmit={handleProcessBulkAdd} className="space-y-4">
+                  <div className="space-y-6">
+                    {/* 1. Bulk Import Operations */}
+                    {registrationContext === 'arrival' && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Upload className="w-4 h-4 text-indigo-400" />
+                          <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Excel / List Imports</h4>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            onClick={() => {
+                              setIsSBHImport(false);
+                              setShowImportDialog(true);
+                            }}
+                            className="flex flex-col items-center justify-center gap-2 bg-indigo-600/10 border border-indigo-500/20 hover:bg-indigo-600/20 text-indigo-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                          >
+                            <div className="bg-indigo-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                              <Upload className="w-5 h-5" />
+                            </div>
+                            Import BDO Excel
+                          </button>
+                          <button
+                            onClick={() => setShowSBHInstructions(true)}
+                            className="flex flex-col items-center justify-center gap-2 bg-amber-600/10 border border-amber-500/20 hover:bg-amber-600/20 text-amber-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                          >
+                            <div className="bg-amber-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                              <FileSpreadsheet className="w-5 h-5" />
+                            </div>
+                            Import Rush Bag List (SBH)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 2. Bulk Manual Entry & Scanning */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Bulk Manual Entry Section */}
+                      <div className="space-y-3 bg-slate-950/40 p-4 rounded-xl border border-slate-800/60 shadow-inner">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Keyboard className="w-4 h-4 text-emerald-400" />
+                          <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Bulk Manual Entry</h4>
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-300 uppercase block">
+                            Baggage Tags List *
+                          </label>
+                          <span className="text-[9px] text-slate-500">
+                            Enter multiple 10-digit tags separated by commas, spaces, or lines.
+                          </span>
+                        </div>
+                        <textarea
+                          rows={4}
+                          placeholder="Type or paste multiple 10-digit tags here..."
+                          value={bulkTagsInput}
+                          onChange={(e) => setBulkTagsInput(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-mono tracking-widest placeholder-slate-700 mt-2"
+                        />
+                      </div>
+
+                      {/* Bulk Barcode Scanning Section */}
+                      <div className="space-y-3 bg-slate-950/40 p-4 rounded-xl border border-slate-800/60 shadow-inner flex flex-col justify-between">
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <QrCode className="w-4 h-4 text-indigo-400" />
+                            <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Bulk Barcode Scanning</h4>
+                          </div>
+                          <p className="text-[10px] text-slate-400">
+                            Use your camera to scan multiple baggage tags in a continuous session. All detected tags will be added to the list.
+                          </p>
+                        </div>
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField('bulk');
+                            setContinuousScannedTags([]);
+                            setIsScannerOpen(true);
+                          }}
+                          className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/20 mt-4"
+                        >
+                          <Camera className="w-5 h-5" />
+                          <span>Launch Bulk Barcode Scanner</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Parser Stats Preview */}
+                    {bulkTagsInput.trim() && (
+                      <div className="flex justify-between items-center bg-slate-950/60 px-4 py-2 rounded-lg border border-slate-800 text-[11px] text-slate-400 font-mono">
+                        <span>Total Tags Detected for Processing:</span>
+                        <span className="font-bold text-emerald-400 text-sm">{parseBulkInput(bulkTagsInput).length} Bags</span>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleProcessBulkAdd} className="space-y-4">
                     {/* Bulk Dispositions & Customs Operations Protocol */}
                     {registrationContext === 'arrival' ? (
                       <div className="bg-indigo-950/25 p-4 rounded-lg border border-indigo-500/20 space-y-3">
@@ -4117,50 +4369,6 @@ export default function RushBaggageWizard() {
                       </div>
                     </div>
 
-                    {/* BULK LIST INPUT AND SCANNER TRIGGERS */}
-                    <div className="space-y-2 bg-slate-950/20 p-4 rounded-lg border border-slate-800/50">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <div>
-                          <label className="text-[11px] font-bold text-slate-300 uppercase block">
-                            Baggage Tags List *
-                          </label>
-                          <span className="text-[9px] text-slate-500">
-                            Enter tags separated by commas, spaces, or lines.
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setScannerTargetField('bulk');
-                            setContinuousScannedTags([]);
-                            setIsScannerOpen(true);
-                          }}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow shadow-indigo-600/10"
-                        >
-                          <QrCode className="w-4 h-4 animate-bounce" />
-                          <span>Continuous Camera Scanning (Bulk)</span>
-                        </button>
-                      </div>
-
-                      <textarea
-                        rows={5}
-                        placeholder="e.g. 0220123456, LH123457 0724123458&#10;LX987654"
-                        value={bulkTagsInput}
-                        onChange={(e) => setBulkTagsInput(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 text-slate-200 px-3 py-2 rounded text-xs font-mono tracking-widest placeholder-slate-700"
-                        required
-                      />
-
-                      {/* Parser Stats Preview */}
-                      {bulkTagsInput.trim() && (
-                        <div className="flex justify-between items-center bg-slate-950 px-3 py-1.5 rounded border border-slate-800 text-[10px] text-slate-400 font-mono">
-                          <span>Total Tags Parsed:</span>
-                          <span className="font-bold text-indigo-400">{parseBulkInput(bulkTagsInput).length} Bags</span>
-                        </div>
-                      )}
-                    </div>
-
                     <button
                       type="submit"
                       className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold py-3 rounded-lg text-xs cursor-pointer shadow-lg shadow-indigo-600/10 transition flex items-center justify-center gap-2"
@@ -4169,7 +4377,8 @@ export default function RushBaggageWizard() {
                       <span>Register and Save Bulk Operations ({parseBulkInput(bulkTagsInput).length} Records)</span>
                     </button>
                   </form>
-                )}
+                </div>
+              )}
               </div>
             )}
           </section>
@@ -4327,13 +4536,25 @@ export default function RushBaggageWizard() {
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search Name, PIR, Tags..."
+                  placeholder="Search Name, PIR, Tags, Remarks..."
                   className="bg-slate-950 border border-slate-800 pl-8 pr-3 py-1.5 rounded text-xs focus:border-indigo-500 text-slate-200 placeholder-slate-500 w-full sm:w-48"
                 />
               </div>
 
+              {/* Remarks filter */}
+              <div className="flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filter by Remarks..."
+                  value={filterRemarks}
+                  onChange={(e) => setFilterRemarks(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded px-2.5 py-1.5 focus:border-indigo-500 w-40"
+                />
+              </div>
+
               {/* Clear filters shortcut */}
-              {(searchTerm || filterFlights.length > 0 || filterDateRange.type !== 'all' || activeFilter.type !== 'all') && (
+              {(searchTerm || filterFlights.length > 0 || filterRemarks || filterDateRange.type !== 'all' || activeFilter.type !== 'all') && (
                 <button
                   onClick={handleClearFilters}
                   className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold flex items-center gap-1 transition"
@@ -4814,6 +5035,8 @@ export default function RushBaggageWizard() {
                     setExcelHeaders([]);
                     setRawPasteText('');
                     setImportSummaryResult(null);
+                    setIsSBHImport(false);
+                    setImportProgressMessage('');
                   }}
                   className="p-1.5 bg-slate-800/80 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-100 transition"
                 >
@@ -4875,9 +5098,14 @@ export default function RushBaggageWizard() {
               </div>
               <div>
                 {importProgress !== null && (
-                  <div className="flex items-center gap-2">
-                    <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />
-                    <span className="text-indigo-300">Working {importProgress}%</span>
+                  <div className="flex flex-col items-end">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />
+                      <span className="text-indigo-300">Working {importProgress}%</span>
+                    </div>
+                    {importProgressMessage && (
+                      <span className="text-[9px] text-slate-500 font-mono mt-0.5">{importProgressMessage}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -5181,6 +5409,7 @@ export default function RushBaggageWizard() {
                         <input
                           type="file"
                           accept=".xlsx,.xls,.csv,.txt"
+                          multiple
                           onChange={handleCSVUpload}
                           className="absolute inset-0 opacity-0 cursor-pointer"
                         />
@@ -5266,6 +5495,7 @@ export default function RushBaggageWizard() {
                             <label className="text-[9px] text-slate-500 font-bold uppercase block">Maps to System Field</label>
                             <select
                               value={currentMapping.systemField}
+                              disabled={isSBHImport}
                               onChange={(e) => {
                                 setColumnMappings(prev => ({
                                   ...prev,
@@ -5276,7 +5506,7 @@ export default function RushBaggageWizard() {
                                   }
                                 }));
                               }}
-                              className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-slate-300 outline-none"
+                              className={`w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-slate-300 outline-none ${isSBHImport ? 'opacity-60 cursor-not-allowed' : ''}`}
                             >
                               <option value="ignore">🗑️ Skip Column / Ignore Data</option>
                               {mappingDictionary.map(entry => (
@@ -5368,7 +5598,7 @@ export default function RushBaggageWizard() {
                             const originalTag = getMappedVal('originalTag');
                             const rushTag = getMappedVal('rushTag');
                             const flight = getMappedVal('flightNo') || 'LH760';
-                            const dest = getMappedVal('destination') || 'BOM';
+                            const dest = getMappedVal('destination');
                             const weightRaw = getMappedVal('weight');
                             const damaged = getMappedVal('damaged');
                             const rawLocked = getMappedVal('ln');
@@ -5479,6 +5709,13 @@ export default function RushBaggageWizard() {
                       </div>
                     </div>
 
+                    {importSummaryResult.filesProcessed && (
+                      <div className="bg-indigo-950/20 p-3 rounded-xl border border-indigo-500/20 text-indigo-200 text-[10px] font-mono flex justify-between items-center">
+                        <span>Batch Files Processed:</span>
+                        <span className="font-bold text-indigo-400">{importSummaryResult.filesProcessed} Files</span>
+                      </div>
+                    )}
+
                     {/* Secondary Data Quality Metrics */}
                     <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80 text-left space-y-3">
                       <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">
@@ -5519,6 +5756,8 @@ export default function RushBaggageWizard() {
                         setRawPasteText('');
                         setImportSummaryResult(null);
                         setActiveSection('dashboard');
+                        setIsSBHImport(false);
+                        setImportProgressMessage('');
                       }}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-xs transition"
                     >
@@ -5548,7 +5787,111 @@ export default function RushBaggageWizard() {
         </div>
       )}
 
-      {/* B. SINGLE RECORD DETAILED EDIT MODAL */}
+      {/* SBH Import Instructions Modal */}
+      {showSBHInstructions && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-300">
+            <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-500/20 rounded-lg">
+                  <HelpCircle className="w-6 h-6 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100 text-lg">Import Rush Bag List (SBH)</h3>
+                  <p className="text-xs text-slate-400">Step-by-step instructions for Star Alliance Baggage Hub</p>
+                </div>
+              </div>
+              <button onClick={() => setShowSBHInstructions(false)} className="p-2 hover:bg-slate-800 rounded-full transition">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="p-8 overflow-y-auto space-y-6">
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/20">1</div>
+                  <div className="space-y-2">
+                    <p className="text-slate-200 font-semibold">Open Star Alliance Baggage Hub (SBH)</p>
+                    <a 
+                      href="https://lhbaghub.staralliance.com/" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 bg-slate-950 border border-slate-800 hover:border-indigo-500/50 text-indigo-400 px-4 py-2 rounded-xl text-sm font-bold transition group"
+                    >
+                      lhbaghub.staralliance.com
+                      <PlusCircle className="w-4 h-4 group-hover:rotate-45 transition-transform" />
+                    </a>
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-2">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/20">2</div>
+                  <div className="space-y-3">
+                    <p className="text-slate-200 font-semibold">Generate the Rush Export Report</p>
+                    <ul className="space-y-3">
+                      <li className="flex gap-2 text-slate-400 text-sm">
+                        <div className="w-1 h-1 bg-indigo-500 rounded-full mt-2 flex-shrink-0" />
+                        <span>Navigate to: <strong className="text-slate-200">Search → Baggage Search</strong></span>
+                      </li>
+                      <li className="flex gap-2 text-slate-400 text-sm">
+                        <div className="w-1 h-1 bg-indigo-500 rounded-full mt-2 flex-shrink-0" />
+                        <span>Enter <strong className="text-slate-200">Date of Departure</strong> from HIN and <strong className="text-slate-200">Handling Station</strong> (FRA, MUC, or ZRH)</span>
+                      </li>
+                      <li className="flex gap-2 text-slate-400 text-sm">
+                        <div className="w-1 h-1 bg-indigo-500 rounded-full mt-2 flex-shrink-0" />
+                        <span>Enter <strong className="text-slate-200">Carrier & Flight Number</strong> (e.g. LH 760)</span>
+                      </li>
+                      <li className="flex gap-2 text-slate-400 text-sm">
+                        <div className="w-1 h-1 bg-indigo-500 rounded-full mt-2 flex-shrink-0" />
+                        <span>Select <strong className="text-slate-200">Bag Type</strong> as <strong className="text-slate-200">RUSH</strong> and <strong className="text-slate-200">WT Rush</strong></span>
+                      </li>
+                      <li className="flex gap-2 text-slate-400 text-sm italic bg-indigo-500/5 p-2 rounded border border-indigo-500/10">
+                        <span>Click <strong className="text-slate-200">Search</strong>, then click <strong className="text-indigo-400">Export Excel</strong>. The file will be in your Downloads folder.</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-2">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/20">3</div>
+                  <div className="space-y-2">
+                    <p className="text-slate-200 font-semibold">Import the downloaded file</p>
+                    <p className="text-slate-400 text-sm">Click the button below to select the Excel file from your computer.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-slate-800">
+                <button
+                  onClick={() => {
+                    setShowSBHInstructions(false);
+                    setIsSBHImport(true);
+                    // Programmatically trigger hidden file input
+                    document.getElementById('sbh-file-input')?.click();
+                  }}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-indigo-600/20 group"
+                >
+                  <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
+                  OK & Understood
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file input for SBH Import */}
+      <input 
+        id="sbh-file-input"
+        type="file" 
+        accept=".xlsx,.xls" 
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          setIsSBHImport(true);
+          handleCSVUpload(e);
+        }}
+      />
       {editingRecord && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-xl shadow-2xl overflow-hidden flex flex-col">
@@ -6204,7 +6547,7 @@ export default function RushBaggageWizard() {
                                 <input
                                   type="text"
                                   required
-                                  placeholder="BOM"
+                                  placeholder="DEL"
                                   value={editingRecord.forwardingDestination || ''}
                                   onChange={(e) => setEditingRecord({ ...editingRecord, forwardingDestination: e.target.value.toUpperCase() })}
                                   className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
@@ -6676,7 +7019,7 @@ export default function RushBaggageWizard() {
                             <input
                               type="text"
                               required
-                              placeholder="BOM"
+                              placeholder="DEL"
                               value={bulkForwardingDestinationNew}
                               onChange={(e) => setBulkForwardingDestinationNew(e.target.value.toUpperCase())}
                               className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 px-3 rounded-lg"
