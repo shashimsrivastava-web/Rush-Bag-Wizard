@@ -35,7 +35,14 @@ import {
   RefreshCw,
   Settings,
   Camera,
-  Keyboard
+  Keyboard,
+  ClipboardList,
+  ArrowRightCircle,
+  Eye,
+  Copy,
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 
 import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
@@ -663,7 +670,17 @@ export default function RushBaggageWizard() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showSBHImportDialog, setShowSBHImportDialog] = useState(false);
   const [showSBHInstructions, setShowSBHInstructions] = useState(false);
+  const [showAlteaInstructions, setShowAlteaInstructions] = useState(false);
+  const [showAlteaPasteWindow, setShowAlteaPasteWindow] = useState(false);
+  const [showAlteaPreview, setShowAlteaPreview] = useState(false);
   const [isSBHImport, setIsSBHImport] = useState(false);
+  const [isAlteaImport, setIsAlteaImport] = useState(false);
+  const [rawAlteaText, setRawAlteaText] = useState('');
+  const [alteaPreviewRecords, setAlteaPreviewRecords] = useState<BaggageRecord[]>([]);
+  const [selectedAlteaRowIds, setSelectedAlteaRowIds] = useState<Set<string>>(new Set());
+  const [alteaSearchQuery, setAlteaSearchQuery] = useState('');
+  const [alteaSortField, setAlteaSortField] = useState<keyof BaggageRecord | 'status'>('id');
+  const [alteaSortDirection, setAlteaSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Intelligent Importer States
   const [mappingDictionary, setMappingDictionary] = useState<DictionaryEntry[]>(DEFAULT_MAPPING_DICTIONARY);
@@ -2218,6 +2235,264 @@ export default function RushBaggageWizard() {
       setImportProgressMessage('');
       alert('No valid data found in selected files.');
     }
+  };
+
+  // Altea Import Handler
+  const handleAlteaImport = async () => {
+    if (!rawAlteaText.trim()) return;
+
+    setShowAlteaPasteWindow(false);
+    setIsAlteaImport(true);
+    setIsAnalyzing(true);
+    setImportProgress(10);
+    setImportProgressMessage('Detecting Altea Format...');
+
+    const lines = rawAlteaText.split(/\r?\n/);
+    const firstLine = lines.find(l => l.trim()) || '';
+    
+    let format: 'cryptic' | 'content' | null = null;
+    if (rawAlteaText.includes('JFE Screen Copy - Plain Text') || rawAlteaText.includes('LOADING STATUS')) {
+      format = 'cryptic';
+    } else if (rawAlteaText.includes('LIST OF:') || rawAlteaText.includes('BAG LIST')) {
+      format = 'content';
+    }
+
+    if (!format) {
+      setIsAnalyzing(false);
+      setImportProgress(null);
+      alert('Unrecognized Altea format. Please ensure you copied the Cryptic or Content output correctly.');
+      return;
+    }
+
+    setImportProgressMessage(`Parsing Altea ${format} data...`);
+    
+    const newImportedRecords: BaggageRecord[] = [];
+    let flightNo = '';
+    let receiptDateRaw = '';
+    const warningList: string[] = [];
+
+    // 1. Header parsing (Flight & Date)
+    for (let i = 0; i < Math.min(30, lines.length); i++) {
+      const line = lines[i].trim();
+      // Look for flight LH760 or LX146 etc.
+      const flightMatch = line.match(/\b([A-Z]{2,3}\d{3,4})\b/i);
+      if (flightMatch && !flightNo) {
+        flightNo = flightMatch[1].toUpperCase();
+      }
+      // Look for 05JUL
+      const dateMatch = line.match(/\b(\d{2}[A-Z]{3})\b/i);
+      if (dateMatch && !receiptDateRaw) {
+        receiptDateRaw = dateMatch[1].toUpperCase();
+      }
+    }
+
+    // 2. Date Math: Input 05JUL -> Store 06JUL
+    let finalReceiptDateISO = new Date().toISOString();
+    if (receiptDateRaw) {
+      try {
+        const currentYear = new Date().getFullYear();
+        const d = new Date(`${receiptDateRaw} ${currentYear}`);
+        if (!isNaN(d.getTime())) {
+          // Add one calendar day as per requirement
+          d.setDate(d.getDate() + 1);
+          finalReceiptDateISO = d.toISOString();
+        }
+      } catch (e) {
+        warningList.push(`Failed to calculate +1 day for Altea date: ${receiptDateRaw}`);
+      }
+    }
+
+    // 3. Record Extraction
+    if (format === 'cryptic') {
+      // Cryptic Output parsing
+      // Pattern: 0014-AC-246669
+      lines.forEach((line, idx) => {
+        const tagMatch = line.match(/(\d{4})-([A-Z]{2})-(\d{6})/);
+        if (tagMatch) {
+          const originalTag = tagMatch[2] + tagMatch[3];
+          let rushTag = '';
+          let passengerName = '';
+          
+          // Check for Loading Status N
+          if (line.includes('Loading Status N') || line.match(/Status\s+N/i)) {
+            rushTag = 'Not Loaded';
+          }
+
+          // Extract name from cryptic pipe-delimited format (usually the 14th column)
+          if (line.includes('|')) {
+            const pipeParts = line.split('|');
+            if (pipeParts.length > 14) {
+              passengerName = pipeParts[14].trim().toUpperCase();
+            }
+          }
+
+          newImportedRecords.push({
+            id: `alt-c-${Date.now()}-${idx}`,
+            sno: (baggageList.length + newImportedRecords.length + 1).toString(),
+            pir: '',
+            name: passengerName || '',
+            originalTag,
+            rushTag,
+            flightNo: flightNo || 'LH760',
+            seal: '',
+            ln: '',
+            destination: '',
+            remarks: 'Altea Import',
+            status: 'Expected',
+            receivedAt: finalReceiptDateISO,
+            customsStatus: 'Pending',
+            disposition: 'Pending',
+            createdAt: new Date().toISOString(),
+            protocol: '',
+            registryType: 'Arrival'
+          });
+        }
+      });
+    } else {
+      // Content Output parsing
+      // Pattern: 2LH 803033
+      lines.forEach((line, idx) => {
+        const tagMatch = line.match(/(\d)([A-Z]{2})\s*(\d{6})/);
+        if (tagMatch) {
+          const originalTag = tagMatch[2] + tagMatch[3];
+          let passengerName = '';
+          
+          // Improved Name extraction for Content Output
+          // Example: 2LH 803033  DEL  A   CAVANAUGH
+          // The name usually follows the destination and status columns
+          const lineParts = line.trim().split(/\s+/);
+          if (lineParts.length >= 5) {
+            // Index 0,1 is the tag (2LH 803033), 2 is DEST, 3 is STS, 4+ is NAME
+            passengerName = lineParts.slice(4).join(' ').trim().toUpperCase();
+            // Clean up any trailing status info if present
+            passengerName = passengerName.split(/\s{2,}/)[0].trim();
+          }
+
+          newImportedRecords.push({
+            id: `alt-o-${Date.now()}-${idx}`,
+            sno: (baggageList.length + newImportedRecords.length + 1).toString(),
+            pir: '',
+            name: passengerName || '',
+            originalTag,
+            rushTag: '',
+            flightNo: flightNo || 'LH760',
+            seal: '',
+            ln: '',
+            destination: '',
+            remarks: 'Altea Import',
+            status: 'Expected',
+            receivedAt: finalReceiptDateISO,
+            customsStatus: 'Pending',
+            disposition: 'Pending',
+            createdAt: new Date().toISOString(),
+            protocol: '',
+            registryType: 'Arrival'
+          });
+        }
+      });
+    }
+
+    if (newImportedRecords.length === 0) {
+      setIsAnalyzing(false);
+      setImportProgress(null);
+      alert('No baggage records could be extracted from the pasted text. Please verify the Altea output format.');
+      return;
+    }
+
+    // Show Preview instead of immediate commit
+    setAlteaPreviewRecords(newImportedRecords);
+    // Select all by default
+    const allIds = new Set(newImportedRecords.map(r => r.id));
+    setSelectedAlteaRowIds(allIds);
+    
+    setIsAnalyzing(false);
+    setImportProgress(null);
+    setImportProgressMessage('');
+    setShowAlteaPreview(true);
+  };
+
+  const handleCommitAlteaImport = async () => {
+    setIsAnalyzing(true);
+    setImportProgress(20);
+    setImportProgressMessage('Committing selected Altea records...');
+
+    // Filter only selected AND valid records
+    const selectedRecords = alteaPreviewRecords.filter(r => 
+      selectedAlteaRowIds.has(r.id) && 
+      r.originalTag && 
+      r.originalTag.length >= 6
+    );
+    
+    const invalidCount = selectedAlteaRowIds.size - selectedRecords.length;
+    
+    let duplicateCount = 0;
+    let skippedCount = 0;
+    let updatedCount = 0;
+    const finalImportBatch: BaggageRecord[] = [];
+    const localBaggageList = [...baggageList];
+
+    selectedRecords.forEach((candidate) => {
+      const isDuplicateInDb = localBaggageList.find(item => 
+        candidate.originalTag && item.originalTag === candidate.originalTag
+      );
+
+      const isDuplicateInBatch = finalImportBatch.find(item => 
+        candidate.originalTag && item.originalTag === candidate.originalTag
+      );
+
+      if (isDuplicateInDb || isDuplicateInBatch) {
+        duplicateCount++;
+        if (isDuplicateInBatch) {
+          skippedCount++;
+          return;
+        }
+
+        if (duplicateMode === 'skip') {
+          skippedCount++;
+          return;
+        } else if (duplicateMode === 'update' && isDuplicateInDb) {
+          updatedCount++;
+          const idxToUpdate = localBaggageList.findIndex(x => x.id === isDuplicateInDb.id);
+          if (idxToUpdate !== -1) {
+            localBaggageList[idxToUpdate] = {
+              ...localBaggageList[idxToUpdate],
+              name: candidate.name || localBaggageList[idxToUpdate].name,
+              flightNo: candidate.flightNo || localBaggageList[idxToUpdate].flightNo,
+              rushTag: candidate.rushTag || localBaggageList[idxToUpdate].rushTag,
+              remarks: localBaggageList[idxToUpdate].remarks + " (Updated via Altea Import)"
+            };
+          }
+          return;
+        }
+      }
+      finalImportBatch.push(candidate);
+    });
+
+    const mergedList = [...finalImportBatch, ...localBaggageList];
+    saveBaggageData(mergedList);
+
+    setImportProgress(100);
+    setImportSummaryResult({
+      totalRows: alteaPreviewRecords.length,
+      imported: finalImportBatch.length,
+      skipped: skippedCount,
+      duplicates: duplicateCount,
+      invalid: invalidCount,
+      blankWeights: finalImportBatch.length,
+      invalidWeights: 0,
+      recognizedLocks: 0,
+      unrecognizedLocks: 0,
+      warnings: [],
+      filesProcessed: 1
+    });
+
+    setImportWizardStep('summary');
+    setShowImportDialog(true);
+    setShowAlteaPreview(false);
+    setIsAnalyzing(false);
+    setImportProgress(null);
+    setImportProgressMessage('');
+    setRawAlteaText('');
   };
 
   // Reset all filters to default
@@ -3859,10 +4134,11 @@ export default function RushBaggageWizard() {
                           <Upload className="w-4 h-4 text-indigo-400" />
                           <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Excel / List Imports</h4>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           <button
                             onClick={() => {
                               setIsSBHImport(false);
+                              setIsAlteaImport(false);
                               setShowImportDialog(true);
                             }}
                             className="flex flex-col items-center justify-center gap-2 bg-indigo-600/10 border border-indigo-500/20 hover:bg-indigo-600/20 text-indigo-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
@@ -3873,13 +4149,29 @@ export default function RushBaggageWizard() {
                             Import BDO Excel
                           </button>
                           <button
-                            onClick={() => setShowSBHInstructions(true)}
+                            onClick={() => {
+                              setIsAlteaImport(false);
+                              setShowSBHInstructions(true);
+                            }}
                             className="flex flex-col items-center justify-center gap-2 bg-amber-600/10 border border-amber-500/20 hover:bg-amber-600/20 text-amber-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
                           >
                             <div className="bg-amber-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
                               <FileSpreadsheet className="w-5 h-5" />
                             </div>
                             Import Rush Bag List (SBH)
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsSBHImport(false);
+                              setIsAlteaImport(true);
+                              setShowAlteaInstructions(true);
+                            }}
+                            className="flex flex-col items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-500/20 hover:bg-emerald-600/20 text-emerald-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                          >
+                            <div className="bg-emerald-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                              <ClipboardList className="w-5 h-5" />
+                            </div>
+                            Import Altea Rush Bag List
                           </button>
                         </div>
                       </div>
@@ -4766,7 +5058,9 @@ export default function RushBaggageWizard() {
                         {/* 3. Rush Tag */}
                         <td className="py-3 px-3 font-mono">
                           {record.rushTag ? (
-                            <span className="text-indigo-400 font-bold">Rush: {record.rushTag}</span>
+                            <span className={record.rushTag === 'Not Loaded' ? 'text-red-500 font-bold' : 'text-indigo-400 font-bold'}>
+                              {record.rushTag === 'Not Loaded' ? record.rushTag : `Rush: ${record.rushTag}`}
+                            </span>
                           ) : (
                             <span className="text-slate-600">-</span>
                           )}
@@ -5637,7 +5931,11 @@ export default function RushBaggageWizard() {
                                 </td>
                                 <td className="py-2 px-3 space-y-0.5">
                                   {originalTag && <div className="text-[11px] font-mono text-slate-300">Tag: {originalTag}</div>}
-                                  {rushTag && <div className="text-[10px] font-mono text-indigo-400 font-bold">Rush: {rushTag}</div>}
+                                  {rushTag && (
+                                    <div className={rushTag === 'Not Loaded' ? "text-[10px] font-mono text-red-500 font-bold" : "text-[10px] font-mono text-indigo-400 font-bold"}>
+                                      {rushTag === 'Not Loaded' ? rushTag : `Rush: ${rushTag}`}
+                                    </div>
+                                  )}
                                   {!originalTag && !rushTag && <span className="text-slate-600">-</span>}
                                 </td>
                                 <td className="py-2 px-3">
@@ -5690,7 +5988,7 @@ export default function RushBaggageWizard() {
                       <CheckCircle className="w-6 h-6" />
                     </div>
                     <div>
-                      <h4 className="font-bold text-slate-200 text-lg">Spreadsheet Import Completed Successfully</h4>
+                      <h4 className="font-bold text-slate-200 text-lg">{isAlteaImport ? 'Altea Import' : 'Spreadsheet Import'} Completed Successfully</h4>
                       <p className="text-xs text-slate-400 mt-1">Swiss reconciliation database state synchronized</p>
                     </div>
 
@@ -5757,6 +6055,7 @@ export default function RushBaggageWizard() {
                         setImportSummaryResult(null);
                         setActiveSection('dashboard');
                         setIsSBHImport(false);
+                        setIsAlteaImport(false);
                         setImportProgressMessage('');
                       }}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-xs transition"
@@ -5880,6 +6179,442 @@ export default function RushBaggageWizard() {
         </div>
       )}
 
+      {/* Altea Import Instructions Modal */}
+      {showAlteaInstructions && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-300">
+            <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 rounded-lg">
+                  <ClipboardList className="w-6 h-6 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100 text-lg">Import Rush Bags from Altea</h3>
+                  <p className="text-xs text-slate-400">Step-by-step instructions for Altea exports</p>
+                </div>
+              </div>
+              <button onClick={() => setShowAlteaInstructions(false)} className="p-2 hover:bg-slate-800 rounded-full transition">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="p-8 overflow-y-auto space-y-6">
+              <div className="space-y-4">
+                <p className="text-slate-300 text-sm">Go to: <strong className="text-slate-100">Flight → Baggage → Bag List → Rush Bags</strong></p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Option 1 (Recommended)</h4>
+                    <p className="text-[11px] font-bold text-slate-200">Device → Cryptic Output to Clipboard</p>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      This option additionally provides the <strong className="text-slate-200">Loading Status</strong> (Loaded / Not Loaded), 
+                      although baggage tags may occasionally contain minor OCR/copying inconsistencies.
+                    </p>
+                  </div>
+                  <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Option 2</h4>
+                    <p className="text-[11px] font-bold text-slate-200">Device → Content to Clipboard</p>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      This provides a cleaner list of baggage tags and passenger names but does not include loading status.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-indigo-950/20 p-4 rounded-xl border border-indigo-500/20 space-y-3">
+                  <p className="text-xs text-indigo-200 font-semibold">After copying the contents:</p>
+                  <ol className="text-[11px] text-indigo-300/80 space-y-2 list-decimal list-inside">
+                    <li>Return to this application.</li>
+                    <li>Click <strong>OK & Understood</strong>.</li>
+                    <li>Paste the copied contents into the large text box.</li>
+                    <li>Click <strong>Import</strong>.</li>
+                  </ol>
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-slate-800 flex gap-3">
+                <button
+                  onClick={() => setShowAlteaInstructions(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-4 rounded-2xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAlteaInstructions(false);
+                    setShowAlteaPasteWindow(true);
+                  }}
+                  className="flex-[2] bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-emerald-600/20 group"
+                >
+                  <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
+                  OK & Understood
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Altea Paste Window Modal */}
+      {showAlteaPasteWindow && (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] animate-in fade-in slide-in-from-bottom-8 duration-500">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 rounded-lg">
+                  <ClipboardList className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100">Paste Altea Rush Bag List</h3>
+                  <p className="text-[10px] text-slate-500 font-mono">Format A: Cryptic Output | Format B: Content Output</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowAlteaPasteWindow(false);
+                  setRawAlteaText('');
+                }} 
+                className="p-2 hover:bg-slate-800 rounded-full transition"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="flex-1 p-6 bg-slate-950 overflow-hidden flex flex-col">
+              <textarea
+                autoFocus
+                className="flex-1 w-full bg-transparent border-none focus:ring-0 text-slate-300 font-mono text-xs leading-relaxed resize-none p-4"
+                placeholder="Paste Altea output here (Ctrl+V)..."
+                value={rawAlteaText}
+                onChange={(e) => setRawAlteaText(e.target.value)}
+              />
+            </div>
+
+            <div className="p-5 border-t border-slate-800 bg-slate-900/50 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-4">
+                <div className="hidden lg:block">
+                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Duplicate Protocol</h4>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setDuplicateMode('skip')}
+                    className={`px-3 py-1.5 rounded-lg border font-semibold font-mono text-[10px] transition ${
+                      duplicateMode === 'skip' 
+                        ? 'bg-indigo-600 border-indigo-500 text-white' 
+                        : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    Skip Duplicates
+                  </button>
+                  <button 
+                    onClick={() => setDuplicateMode('update')}
+                    className={`px-3 py-1.5 rounded-lg border font-semibold font-mono text-[10px] transition ${
+                      duplicateMode === 'update' 
+                        ? 'bg-amber-600 border-amber-500 text-white' 
+                        : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    Overwrite & Update
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex gap-3 mr-3 pr-3 border-r border-slate-800">
+                  <button
+                    onClick={() => setRawAlteaText('')}
+                    className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-bold rounded-xl transition"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAlteaPasteWindow(false);
+                      setRawAlteaText('');
+                    }}
+                    className="px-6 py-2.5 border border-slate-800 hover:bg-slate-800 text-slate-500 text-xs font-bold rounded-xl transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <button
+                  disabled={!rawAlteaText.trim()}
+                  onClick={() => handleAlteaImport()}
+                  className="px-10 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-600/20"
+                >
+                  <ArrowRightCircle className="w-5 h-5" />
+                  Import
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Altea Preview Modal */}
+      {showAlteaPreview && (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[120] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-7xl rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[90vh] animate-in fade-in slide-in-from-bottom-8 duration-500">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 rounded-lg">
+                  <Eye className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100">Altea Import Preview</h3>
+                  <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">Verify & Validate records before committing</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="bg-slate-950 px-4 py-1.5 rounded-full border border-slate-800 flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <span className="text-[10px] font-bold text-slate-300">Ready: {alteaPreviewRecords.filter(r => !baggageList.some(b => b.originalTag === r.originalTag) && r.originalTag && r.name && r.name !== 'UNKNOWN').length}</span>
+                  </div>
+                  <div className="flex items-center gap-2 border-l border-slate-800 pl-4">
+                    <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                    <span className="text-[10px] font-bold text-slate-300">Duplicate: {alteaPreviewRecords.filter(r => baggageList.some(b => b.originalTag === r.originalTag)).length}</span>
+                  </div>
+                  <div className="flex items-center gap-2 border-l border-slate-800 pl-4">
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                    <span className="text-[10px] font-bold text-slate-300">Invalid: {alteaPreviewRecords.filter(r => !r.originalTag || r.originalTag.length < 6).length}</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowAlteaPreview(false);
+                    setAlteaPreviewRecords([]);
+                    setSelectedAlteaRowIds(new Set());
+                  }} 
+                  className="p-2 hover:bg-slate-800 rounded-full transition"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 border-b border-slate-800 bg-slate-900/30 flex justify-between items-center gap-4">
+              <div className="flex-1 max-w-md relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Search preview (Tag, Name, Flight...)"
+                  value={alteaSearchQuery}
+                  onChange={(e) => setAlteaSearchQuery(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs py-2 pl-9 pr-4 rounded-xl focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => {
+                    const allIds = new Set(alteaPreviewRecords.map(r => r.id));
+                    setSelectedAlteaRowIds(allIds);
+                  }}
+                  className="px-3 py-1.5 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition uppercase tracking-wider"
+                >
+                  Select All
+                </button>
+                <button 
+                  onClick={() => setSelectedAlteaRowIds(new Set())}
+                  className="px-3 py-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-300 transition uppercase tracking-wider"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto bg-slate-950">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 bg-slate-900 z-10">
+                  <tr className="border-b border-slate-800">
+                    <th className="py-3 px-4 text-left w-12">
+                      <input 
+                        type="checkbox"
+                        checked={selectedAlteaRowIds.size === alteaPreviewRecords.length && alteaPreviewRecords.length > 0}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedAlteaRowIds(new Set(alteaPreviewRecords.map(r => r.id)));
+                          } else {
+                            setSelectedAlteaRowIds(new Set());
+                          }
+                        }}
+                        className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
+                    {[
+                      { field: 'status', label: 'Status' },
+                      { field: 'flightNo', label: 'Flight' },
+                      { field: 'receivedAt', label: 'Date' },
+                      { field: 'originalTag', label: 'Original Tag' },
+                      { field: 'name', label: 'Passenger Name' },
+                      { field: 'rushTag', label: 'Rush Status' },
+                      { field: 'remarks', label: 'Remarks' }
+                    ].map((col) => (
+                      <th 
+                        key={col.field}
+                        onClick={() => {
+                          if (alteaSortField === col.field) {
+                            setAlteaSortDirection(alteaSortDirection === 'asc' ? 'desc' : 'asc');
+                          } else {
+                            setAlteaSortField(col.field as any);
+                            setAlteaSortDirection('asc');
+                          }
+                        }}
+                        className="py-3 px-4 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-800 transition-colors"
+                      >
+                        <div className="flex items-center gap-1">
+                          {col.label}
+                          {alteaSortField === col.field && (
+                            alteaSortDirection === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                          )}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-900">
+                  {alteaPreviewRecords
+                    .filter(r => {
+                      if (!alteaSearchQuery) return true;
+                      const q = alteaSearchQuery.toLowerCase();
+                      return (r.originalTag || '').toLowerCase().includes(q) || 
+                             (r.name || '').toLowerCase().includes(q) || 
+                             (r.flightNo || '').toLowerCase().includes(q);
+                    })
+                    .sort((a, b) => {
+                      let valA: any = a[alteaSortField as keyof BaggageRecord] || '';
+                      let valB: any = b[alteaSortField as keyof BaggageRecord] || '';
+
+                      if (alteaSortField === 'status') {
+                        const getStatusValue = (rec: BaggageRecord) => {
+                          const isDup = baggageList.some(b => b.originalTag === rec.originalTag);
+                          const isInv = !rec.originalTag || rec.originalTag.length < 6;
+                          if (isInv) return 3;
+                          if (isDup) return 2;
+                          if (!rec.name || rec.name === 'UNKNOWN') return 1;
+                          return 0;
+                        };
+                        valA = getStatusValue(a);
+                        valB = getStatusValue(b);
+                      }
+
+                      if (typeof valA === 'string') {
+                        return alteaSortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                      }
+                      return alteaSortDirection === 'asc' ? (valA > valB ? 1 : -1) : (valB > valA ? 1 : -1);
+                    })
+                    .map((record) => {
+                      const isDuplicate = baggageList.some(b => b.originalTag === record.originalTag);
+                      const isInvalidTag = !record.originalTag || record.originalTag.length < 6;
+                      const isMissingName = !record.name || record.name === 'UNKNOWN';
+                      
+                      let statusLabel = 'Ready';
+                      let statusColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+                      let statusIcon = <CheckCircle className="w-3 h-3" />;
+                      let statusReason = 'Record is valid and ready for import';
+                      
+                      if (isInvalidTag) {
+                        statusLabel = 'Invalid Tag';
+                        statusColor = 'text-red-400 bg-red-500/10 border-red-500/20';
+                        statusIcon = <AlertCircle className="w-3 h-3" />;
+                        statusReason = 'Baggage tag format is unrecognized or too short';
+                      } else if (isDuplicate) {
+                        statusLabel = 'Already Exists';
+                        statusColor = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+                        statusIcon = <Copy className="w-3 h-3" />;
+                        statusReason = 'Tag number already exists in the reconciliation database';
+                      } else if (isMissingName) {
+                        statusLabel = 'Missing Name';
+                        statusColor = 'text-orange-400 bg-orange-500/10 border-orange-500/20';
+                        statusIcon = <AlertTriangle className="w-3 h-3" />;
+                        statusReason = 'Passenger name could not be extracted from Altea data';
+                      }
+
+                      return (
+                        <tr key={record.id} className={`hover:bg-slate-900/50 transition-colors ${selectedAlteaRowIds.has(record.id) ? 'bg-indigo-500/5' : ''}`}>
+                          <td className="py-2.5 px-4">
+                            <input 
+                              type="checkbox"
+                              checked={selectedAlteaRowIds.has(record.id)}
+                              onChange={() => {
+                                const newIds = new Set(selectedAlteaRowIds);
+                                if (newIds.has(record.id)) newIds.delete(record.id);
+                                else newIds.add(record.id);
+                                setSelectedAlteaRowIds(newIds);
+                              }}
+                              className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <div 
+                              title={statusReason}
+                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${statusColor} text-[9px] font-bold uppercase tracking-tight cursor-help`}
+                            >
+                              {statusIcon}
+                              {statusLabel}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-4 text-xs font-bold text-slate-300 font-mono">{record.flightNo}</td>
+                          <td className="py-2.5 px-4 text-xs text-slate-400 font-mono">
+                            {record.receivedAt ? new Date(record.receivedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }).toUpperCase() : '-'}
+                          </td>
+                          <td className="py-2.5 px-4 text-xs font-bold text-slate-200 font-mono">{record.originalTag}</td>
+                          <td className="py-2.5 px-4 text-xs text-slate-300 font-medium">{record.name}</td>
+                          <td className="py-2.5 px-4">
+                            {record.rushTag === 'Not Loaded' ? (
+                              <span className="text-[10px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20 uppercase">Not Loaded</span>
+                            ) : (
+                              <span className="text-slate-600 text-[10px]">-</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 text-[10px] text-slate-500 italic">{record.remarks}</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="p-5 border-t border-slate-800 bg-slate-900/50 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex flex-col">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Selection Summary</span>
+                <span className="text-sm font-bold text-indigo-400">
+                  {selectedAlteaRowIds.size} of {alteaPreviewRecords.length} records selected
+                </span>
+              </div>
+              <div className="flex gap-4">
+                <button
+                  onClick={() => {
+                    setShowAlteaPreview(false);
+                    setShowAlteaPasteWindow(true);
+                  }}
+                  className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-bold rounded-xl transition flex items-center gap-2"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back to Paste
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAlteaPreview(false);
+                    setAlteaPreviewRecords([]);
+                    setRawAlteaText('');
+                  }}
+                  className="px-6 py-2.5 border border-slate-800 hover:bg-slate-800 text-slate-500 text-xs font-bold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={selectedAlteaRowIds.size === 0}
+                  onClick={() => handleCommitAlteaImport()}
+                  className="px-10 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-600/20"
+                >
+                  <CheckCircle className="w-5 h-5" />
+                  Commit Import
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hidden file input for SBH Import */}
       <input 
         id="sbh-file-input"
@@ -5914,7 +6649,7 @@ export default function RushBaggageWizard() {
                   <div>Passenger Name: <strong className="text-slate-100">{editingRecord.name}</strong></div>
                   <div>PIR ID: <strong className="text-slate-100 font-mono">{editingRecord.pir || 'NO PIR'}</strong></div>
                   <div>Original Tag: <strong className="text-slate-100 font-mono">{editingRecord.originalTag || '-'}</strong></div>
-                  <div>Rush Tag: <strong className="text-indigo-400 font-mono">{editingRecord.rushTag || '-'}</strong></div>
+                  <div>Rush Tag: <strong className={editingRecord.rushTag === 'Not Loaded' ? 'text-red-400 font-mono' : 'text-indigo-400 font-mono'}>{editingRecord.rushTag || '-'}</strong></div>
                   <div>Flight Ops: <strong className="text-slate-100 font-mono">{editingRecord.flightNo}</strong></div>
                   <div>Destination: <strong className="text-slate-100 font-mono">{editingRecord.destination}</strong></div>
                   <div className="col-span-2 mt-2">
