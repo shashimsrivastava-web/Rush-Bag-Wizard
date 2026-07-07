@@ -42,7 +42,10 @@ import {
   Copy,
   ArrowLeft,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Share2,
+  Mail,
+  Smartphone
 } from 'lucide-react';
 
 import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
@@ -681,6 +684,24 @@ export default function RushBaggageWizard() {
   const [alteaSearchQuery, setAlteaSearchQuery] = useState('');
   const [alteaSortField, setAlteaSortField] = useState<keyof BaggageRecord | 'status'>('id');
   const [alteaSortDirection, setAlteaSortDirection] = useState<'asc' | 'desc'>('asc');
+  
+  // Mobile & OCR States
+  const [isMobile, setIsMobile] = useState(false);
+  const [isOcrLoading, setIsOcrLoading] = useState(false);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [ocrTargetMode, setOcrTargetMode] = useState<'altea' | 'table'>('altea');
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Detect mobile environment
+    const checkMobile = () => {
+      setIsMobile(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+    };
+    checkMobile();
+    // Also add listener for window resize in case they toggle device mode
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Intelligent Importer States
   const [mappingDictionary, setMappingDictionary] = useState<DictionaryEntry[]>(DEFAULT_MAPPING_DICTIONARY);
@@ -2411,6 +2432,82 @@ export default function RushBaggageWizard() {
     setShowAlteaPreview(true);
   };
 
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsOcrLoading(true);
+    setOcrError(null);
+    setImportProgress(30);
+    setImportProgressMessage('Scanning document with Gemini Vision...');
+
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        try {
+          const base64Image = reader.result as string;
+          
+          const response = await fetch('/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: base64Image, mode: ocrTargetMode }),
+          });
+
+          const result = await response.json();
+
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          if (ocrTargetMode === 'altea') {
+            setRawAlteaText(result.text || '');
+            setShowAlteaPasteWindow(true);
+            setImportProgress(null);
+            setImportProgressMessage('');
+            setIsOcrLoading(false);
+          } else {
+            // Handle table data (BDO/SBH)
+            if (result.data) {
+              const headers = ['Flight No', 'Date', 'Original Tag', 'Passenger Name', 'Weight', 'Rush Status', 'Remarks'];
+              const rows = result.data.map((obj: any) => [
+                obj.flightNo || '',
+                obj.receivedAt || '',
+                obj.originalTag || '',
+                obj.name || '',
+                obj.weight || '',
+                obj.rushTag || '',
+                obj.remarks || ''
+              ]);
+              
+              setImportProgress(60);
+              setImportProgressMessage('Mapping OCR fields to database...');
+              
+              setTimeout(() => {
+                analyzeGrid([headers, ...rows]);
+                setImportProgress(null);
+                setImportProgressMessage('');
+                setIsOcrLoading(false);
+              }, 800);
+            } else {
+              throw new Error("Could not extract table data from image.");
+            }
+          }
+        } catch (err: any) {
+          setOcrError(err.message || 'OCR processing failed');
+          setIsOcrLoading(false);
+          setImportProgress(null);
+        }
+      };
+    } catch (err: any) {
+      setOcrError(err.message || 'Image reading failed');
+      setIsOcrLoading(false);
+      setImportProgress(null);
+    } finally {
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
+    }
+  };
+
   const handleCommitAlteaImport = async () => {
     setIsAnalyzing(true);
     setImportProgress(20);
@@ -2621,7 +2718,7 @@ export default function RushBaggageWizard() {
   }, [baggageList, filteredBaggage]);
 
   // Export to Excel
-  const exportToExcel = () => {
+  const generateExportWorkbook = () => {
     const worksheet = XLSX.utils.json_to_sheet(filteredBaggage.map(r => ({
       'Registry Type': r.registryType,
       'Flight No': r.flightNo,
@@ -2641,7 +2738,66 @@ export default function RushBaggageWizard() {
     })));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Baggage Report');
+    return workbook;
+  };
+
+  const exportToExcel = () => {
+    const workbook = generateExportWorkbook();
     XLSX.writeFile(workbook, `Baggage_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const handleShareViaWhatsApp = async () => {
+    const fileName = `Baggage_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const workbook = generateExportWorkbook();
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const file = new File([blob], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: 'Baggage Report',
+          text: 'Please find the attached Baggage Report.'
+        });
+      } catch (err) {
+        console.error('Share failed:', err);
+        window.open(`https://wa.me/?text=${encodeURIComponent('Baggage Report ' + fileName)}`, '_blank');
+      }
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent('Baggage Report ' + fileName)}`, '_blank');
+      exportToExcel();
+    }
+  };
+
+  const handleShareViaEmail = async () => {
+    const subject = 'Left-Behind Baggage Report';
+    const body = 'Please find the attached baggage report.';
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    exportToExcel();
+  };
+
+  const copyToClipboardTable = async () => {
+    const headers = ['Flight No', 'Date', 'Original Tag', 'Name', 'Status', 'Disposition'];
+    let text = headers.join('\t') + '\n';
+    filteredBaggage.forEach(r => {
+      text += [
+        r.flightNo,
+        r.receivedAt ? new Date(r.receivedAt).toLocaleDateString() : '',
+        r.originalTag,
+        r.name,
+        r.status,
+        r.disposition
+      ].join('\t') + '\n';
+    });
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Report data copied to clipboard as table!');
+    } catch (err) {
+      console.error('Failed to copy:', err);
+      alert('Failed to copy to clipboard.');
+    }
   };
 
   // Force trigger demo backdate
@@ -4135,44 +4291,88 @@ export default function RushBaggageWizard() {
                           <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Excel / List Imports</h4>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <button
-                            onClick={() => {
-                              setIsSBHImport(false);
-                              setIsAlteaImport(false);
-                              setShowImportDialog(true);
-                            }}
-                            className="flex flex-col items-center justify-center gap-2 bg-indigo-600/10 border border-indigo-500/20 hover:bg-indigo-600/20 text-indigo-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
-                          >
-                            <div className="bg-indigo-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
-                              <Upload className="w-5 h-5" />
-                            </div>
-                            Import BDO Excel
-                          </button>
-                          <button
-                            onClick={() => {
-                              setIsAlteaImport(false);
-                              setShowSBHInstructions(true);
-                            }}
-                            className="flex flex-col items-center justify-center gap-2 bg-amber-600/10 border border-amber-500/20 hover:bg-amber-600/20 text-amber-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
-                          >
-                            <div className="bg-amber-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
-                              <FileSpreadsheet className="w-5 h-5" />
-                            </div>
-                            Import Rush Bag List (SBH)
-                          </button>
-                          <button
-                            onClick={() => {
-                              setIsSBHImport(false);
-                              setIsAlteaImport(true);
-                              setShowAlteaInstructions(true);
-                            }}
-                            className="flex flex-col items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-500/20 hover:bg-emerald-600/20 text-emerald-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
-                          >
-                            <div className="bg-emerald-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
-                              <ClipboardList className="w-5 h-5" />
-                            </div>
-                            Import Altea Rush Bag List
-                          </button>
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => {
+                                setIsSBHImport(false);
+                                setIsAlteaImport(false);
+                                setShowImportDialog(true);
+                              }}
+                              className="flex-1 flex flex-col items-center justify-center gap-2 bg-indigo-600/10 border border-indigo-500/20 hover:bg-indigo-600/20 text-indigo-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                            >
+                              <div className="bg-indigo-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                                <Upload className="w-5 h-5" />
+                              </div>
+                              Import BDO Excel
+                            </button>
+                            {isMobile && (
+                              <button
+                                onClick={() => {
+                                  setOcrTargetMode('table');
+                                  cameraInputRef.current?.click();
+                                }}
+                                className="flex items-center justify-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-[10px] font-bold py-2 rounded-lg transition border border-indigo-500/10"
+                              >
+                                <Camera className="w-3 h-3" />
+                                Capture Sheet
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => {
+                                setIsAlteaImport(false);
+                                setShowSBHInstructions(true);
+                              }}
+                              className="flex-1 flex flex-col items-center justify-center gap-2 bg-amber-600/10 border border-amber-500/20 hover:bg-amber-600/20 text-amber-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                            >
+                              <div className="bg-amber-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                                <FileSpreadsheet className="w-5 h-5" />
+                              </div>
+                              Import Rush Bag List (SBH)
+                            </button>
+                            {isMobile && (
+                              <button
+                                onClick={() => {
+                                  setOcrTargetMode('table');
+                                  cameraInputRef.current?.click();
+                                }}
+                                className="flex items-center justify-center gap-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-[10px] font-bold py-2 rounded-lg transition border border-amber-500/10"
+                              >
+                                <Camera className="w-3 h-3" />
+                                Capture Sheet
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => {
+                                setIsSBHImport(false);
+                                setIsAlteaImport(true);
+                                setShowAlteaInstructions(true);
+                              }}
+                              className="flex-1 flex flex-col items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-500/20 hover:bg-emerald-600/20 text-emerald-400 text-xs font-bold py-4 rounded-xl transition cursor-pointer group"
+                            >
+                              <div className="bg-emerald-600/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                                <ClipboardList className="w-5 h-5" />
+                              </div>
+                              Import Altea Rush Bag List
+                            </button>
+                            {isMobile && (
+                              <button
+                                onClick={() => {
+                                  setOcrTargetMode('altea');
+                                  cameraInputRef.current?.click();
+                                }}
+                                className="flex items-center justify-center gap-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[10px] font-bold py-2 rounded-lg transition border border-emerald-500/10"
+                              >
+                                <Camera className="w-3 h-3" />
+                                Capture Screen
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -4740,14 +4940,47 @@ export default function RushBaggageWizard() {
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              <button
-                onClick={exportToExcel}
-                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3 py-1.5 rounded cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Export Excel
-              </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={exportToExcel}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                  title="Download Excel Report"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Excel
+                </button>
+                
+                {isMobile && (
+                  <button
+                    onClick={handleShareViaWhatsApp}
+                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-emerald-600/20 border border-emerald-500/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                    title="Share via WhatsApp/Native"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    Share
+                  </button>
+                )}
+
+                <button
+                  onClick={handleShareViaEmail}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-indigo-600/20 border border-indigo-500/20 hover:bg-indigo-600/30 text-indigo-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                  title="Send via Email"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  Email
+                </button>
+
+                <button
+                  onClick={copyToClipboardTable}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-amber-600/20 border border-amber-500/20 hover:bg-amber-600/30 text-amber-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                  title="Copy Table to Clipboard"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy
+                </button>
+              </div>
+
               {/* Registry filter dropdown */}
               <div className="flex items-center gap-1.5">
                 <Filter className="w-3.5 h-3.5 text-slate-400" />
@@ -5596,7 +5829,7 @@ export default function RushBaggageWizard() {
               {/* STEP 1: UPLOAD / RAW PASTE SOURCE */}
               {importWizardStep === 'upload' && (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className={`grid grid-cols-1 ${isMobile ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4 text-xs`}>
                     <button
                       onClick={() => setImportTab('paste')}
                       className={`p-4 rounded-xl border text-left transition relative ${
@@ -5630,6 +5863,25 @@ export default function RushBaggageWizard() {
                         Directly process your BDO file. Drag and drop any Excel file (.xlsx, .xls), standard CSV, or tab-delimited text sheets.
                       </p>
                     </button>
+
+                    {isMobile && (
+                      <button
+                        onClick={() => {
+                          setShowImportDialog(false);
+                          setOcrTargetMode('table');
+                          cameraInputRef.current?.click();
+                        }}
+                        className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-950/20 text-indigo-200 text-left transition relative"
+                      >
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Camera className="w-4 h-4 text-indigo-400" />
+                          <span className="font-bold text-slate-200">Option 3: Camera Capture</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                          Photograph a printed baggage list or screen. Gemini AI will convert the image into structured data.
+                        </p>
+                      </button>
+                    )}
                   </div>
 
                   {/* Duplicate Resolution Setting */}
@@ -6160,18 +6412,36 @@ export default function RushBaggageWizard() {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-slate-800">
+              <div className="pt-6 border-t border-slate-800 flex flex-col gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={() => {
+                      setShowSBHInstructions(false);
+                      setOcrTargetMode('table');
+                      cameraInputRef.current?.click();
+                    }}
+                    className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-amber-600/20 group"
+                  >
+                    <Camera className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                    Capture Sheet with Camera
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSBHInstructions(false);
+                      setIsSBHImport(true);
+                      document.getElementById('sbh-file-input')?.click();
+                    }}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-indigo-600/20 group"
+                  >
+                    <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
+                    Import Excel / List
+                  </button>
+                </div>
                 <button
-                  onClick={() => {
-                    setShowSBHInstructions(false);
-                    setIsSBHImport(true);
-                    // Programmatically trigger hidden file input
-                    document.getElementById('sbh-file-input')?.click();
-                  }}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-indigo-600/20 group"
+                  onClick={() => setShowSBHInstructions(false)}
+                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl transition text-sm"
                 >
-                  <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
-                  OK & Understood
+                  Cancel
                 </button>
               </div>
             </div>
@@ -6231,22 +6501,35 @@ export default function RushBaggageWizard() {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-slate-800 flex gap-3">
+              <div className="pt-6 border-t border-slate-800 flex flex-col gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={() => {
+                      setShowAlteaInstructions(false);
+                      setOcrTargetMode('altea');
+                      cameraInputRef.current?.click();
+                    }}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-indigo-600/20 group"
+                  >
+                    <Camera className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                    Capture Altea Screen
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAlteaInstructions(false);
+                      setShowAlteaPasteWindow(true);
+                    }}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-emerald-600/20 group"
+                  >
+                    <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
+                    Paste Clipboard
+                  </button>
+                </div>
                 <button
                   onClick={() => setShowAlteaInstructions(false)}
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-4 rounded-2xl transition"
+                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl transition text-sm"
                 >
                   Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAlteaInstructions(false);
-                    setShowAlteaPasteWindow(true);
-                  }}
-                  className="flex-[2] bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-emerald-600/20 group"
-                >
-                  <Check className="w-5 h-5 group-hover:scale-125 transition-transform" />
-                  OK & Understood
                 </button>
               </div>
             </div>
@@ -6627,6 +6910,38 @@ export default function RushBaggageWizard() {
           handleCSVUpload(e);
         }}
       />
+
+      {/* Hidden camera input for OCR */}
+      <input
+        ref={cameraInputRef}
+        id="camera-ocr-input"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleCameraCapture}
+      />
+
+      {/* OCR Loading Overlay */}
+      {isOcrLoading && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex flex-col items-center justify-center">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+            className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full mb-6"
+          />
+          <h3 className="text-xl font-bold text-white mb-2">Analyzing Image...</h3>
+          <p className="text-slate-400 font-mono text-xs animate-pulse">Gemini AI is extracting baggage data...</p>
+          <div className="mt-8 w-64 h-1 bg-slate-800 rounded-full overflow-hidden">
+            <motion.div
+              initial={{ width: "0%" }}
+              animate={{ width: "100%" }}
+              transition={{ duration: 5, ease: "easeInOut" }}
+              className="h-full bg-indigo-500"
+            />
+          </div>
+        </div>
+      )}
       {editingRecord && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-xl shadow-2xl overflow-hidden flex flex-col">
