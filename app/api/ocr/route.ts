@@ -19,14 +19,18 @@ export async function POST(req: NextRequest) {
     }
 
     // Determine MIME type dynamically and remove prefix
-    const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
+    const mimeMatch = image.match(/^data:([^;]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+    const base64Data = image.replace(/^data:[^;]+;base64,/, "");
 
     let prompt = "";
     let responseSchema = undefined;
 
-    if (mode === "altea") {
+    if (mode === "ocr_only") {
+      prompt = `Extract all readable text and tables from this document image. 
+      Return the raw text content exactly as written, preserving alignment, spacing, columns, and layout as much as possible. 
+      Do not output any preamble, JSON wrappers, markdown annotations, or formatting notes. Return ONLY the verbatim text.`;
+    } else if (mode === "altea") {
       prompt = `Extract all text from this Altea screen or printed report. 
       Preserve the layout, line breaks, and spacing exactly as it appears. 
       This is airline terminal output (Cryptic or Content format). 
