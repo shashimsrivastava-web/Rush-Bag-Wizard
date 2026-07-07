@@ -50,6 +50,7 @@ import {
 
 import { DEFAULT_IATA_AIRLINE_MAP, getCanonicalTag, get10DigitTag, matchTag } from './lib/iata';
 import ScannerModal from './components/ScannerModal';
+import OcrCameraModal from './components/OcrCameraModal';
 
 // Configurable Flight Numbers
 const ARRIVAL_FLIGHTS = ['LH760', 'LH762', 'LX146', 'LX2646'];
@@ -690,6 +691,7 @@ export default function RushBaggageWizard() {
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [ocrTargetMode, setOcrTargetMode] = useState<'altea' | 'table'>('altea');
+  const [isOcrCameraOpen, setIsOcrCameraOpen] = useState(false);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -2432,72 +2434,78 @@ export default function RushBaggageWizard() {
     setShowAlteaPreview(true);
   };
 
-  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processOcrImage = async (base64Image: string) => {
     setIsOcrLoading(true);
     setOcrError(null);
     setImportProgress(30);
     setImportProgressMessage('Scanning document with Gemini Vision...');
 
     try {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = async () => {
-        try {
-          const base64Image = reader.result as string;
+      const response = await fetch('/api/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Image, mode: ocrTargetMode }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      if (ocrTargetMode === 'altea') {
+        setRawAlteaText(result.text || '');
+        setShowAlteaPasteWindow(true);
+        setImportProgress(null);
+        setImportProgressMessage('');
+        setIsOcrLoading(false);
+      } else {
+        // Handle table data (BDO/SBH)
+        if (result.data) {
+          const headers = ['Flight No', 'Date', 'Original Tag', 'Passenger Name', 'Weight', 'Rush Status', 'Remarks'];
+          const rows = result.data.map((obj: any) => [
+            obj.flightNo || '',
+            obj.receivedAt || '',
+            obj.originalTag || '',
+            obj.name || '',
+            obj.weight || '',
+            obj.rushTag || '',
+            obj.remarks || ''
+          ]);
           
-          const response = await fetch('/api/ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: base64Image, mode: ocrTargetMode }),
-          });
-
-          const result = await response.json();
-
-          if (result.error) {
-            throw new Error(result.error);
-          }
-
-          if (ocrTargetMode === 'altea') {
-            setRawAlteaText(result.text || '');
-            setShowAlteaPasteWindow(true);
+          setImportProgress(60);
+          setImportProgressMessage('Mapping OCR fields to database...');
+          
+          setTimeout(() => {
+            setIsSBHImport(false);
+            analyzeGrid([headers, ...rows]);
+            setShowImportDialog(true);
             setImportProgress(null);
             setImportProgressMessage('');
             setIsOcrLoading(false);
-          } else {
-            // Handle table data (BDO/SBH)
-            if (result.data) {
-              const headers = ['Flight No', 'Date', 'Original Tag', 'Passenger Name', 'Weight', 'Rush Status', 'Remarks'];
-              const rows = result.data.map((obj: any) => [
-                obj.flightNo || '',
-                obj.receivedAt || '',
-                obj.originalTag || '',
-                obj.name || '',
-                obj.weight || '',
-                obj.rushTag || '',
-                obj.remarks || ''
-              ]);
-              
-              setImportProgress(60);
-              setImportProgressMessage('Mapping OCR fields to database...');
-              
-              setTimeout(() => {
-                analyzeGrid([headers, ...rows]);
-                setImportProgress(null);
-                setImportProgressMessage('');
-                setIsOcrLoading(false);
-              }, 800);
-            } else {
-              throw new Error("Could not extract table data from image.");
-            }
-          }
-        } catch (err: any) {
-          setOcrError(err.message || 'OCR processing failed');
-          setIsOcrLoading(false);
-          setImportProgress(null);
+          }, 800);
+        } else {
+          throw new Error("Could not extract table data from image.");
         }
+      }
+    } catch (err: any) {
+      setOcrError(err.message || 'OCR processing failed');
+      setIsOcrLoading(false);
+      setImportProgress(null);
+      alert(`OCR Error: ${err.message || 'Failed to process image'}`);
+    }
+  };
+
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        const base64Image = reader.result as string;
+        await processOcrImage(base64Image);
       };
     } catch (err: any) {
       setOcrError(err.message || 'Image reading failed');
@@ -2991,6 +2999,18 @@ export default function RushBaggageWizard() {
               <span className="text-slate-400">Role: </span>
               <span className="font-bold text-slate-100 uppercase font-mono">{user}</span>
             </div>
+
+            <button
+              onClick={() => {
+                setOcrTargetMode('table');
+                setIsOcrCameraOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 rounded-lg text-[10px] font-bold transition cursor-pointer border border-indigo-500/20 group"
+              title="Smart OCR Scan"
+            >
+              <Camera className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+              Smart Scan
+            </button>
 
             <button
               onClick={handleLogout}
@@ -4305,18 +4325,16 @@ export default function RushBaggageWizard() {
                               </div>
                               Import BDO Excel
                             </button>
-                            {isMobile && (
-                              <button
-                                onClick={() => {
-                                  setOcrTargetMode('table');
-                                  cameraInputRef.current?.click();
-                                }}
-                                className="flex items-center justify-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-[10px] font-bold py-2 rounded-lg transition border border-indigo-500/10"
-                              >
-                                <Camera className="w-3 h-3" />
-                                Capture Sheet
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                setOcrTargetMode('table');
+                                setIsOcrCameraOpen(true);
+                              }}
+                              className="flex items-center justify-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-[10px] font-bold py-2 rounded-lg transition border border-indigo-500/10"
+                            >
+                              <Camera className="w-3 h-3" />
+                              Capture Sheet
+                            </button>
                           </div>
 
                           <div className="flex flex-col gap-2">
@@ -4332,18 +4350,16 @@ export default function RushBaggageWizard() {
                               </div>
                               Import Rush Bag List (SBH)
                             </button>
-                            {isMobile && (
-                              <button
-                                onClick={() => {
-                                  setOcrTargetMode('table');
-                                  cameraInputRef.current?.click();
-                                }}
-                                className="flex items-center justify-center gap-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-[10px] font-bold py-2 rounded-lg transition border border-amber-500/10"
-                              >
-                                <Camera className="w-3 h-3" />
-                                Capture Sheet
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                setOcrTargetMode('table');
+                                setIsOcrCameraOpen(true);
+                              }}
+                              className="flex items-center justify-center gap-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-[10px] font-bold py-2 rounded-lg transition border border-amber-500/10"
+                            >
+                              <Camera className="w-3 h-3" />
+                              Capture Sheet
+                            </button>
                           </div>
 
                           <div className="flex flex-col gap-2">
@@ -4360,18 +4376,16 @@ export default function RushBaggageWizard() {
                               </div>
                               Import Altea Rush Bag List
                             </button>
-                            {isMobile && (
-                              <button
-                                onClick={() => {
-                                  setOcrTargetMode('altea');
-                                  cameraInputRef.current?.click();
-                                }}
-                                className="flex items-center justify-center gap-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[10px] font-bold py-2 rounded-lg transition border border-emerald-500/10"
-                              >
-                                <Camera className="w-3 h-3" />
-                                Capture Screen
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                setOcrTargetMode('altea');
+                                setIsOcrCameraOpen(true);
+                              }}
+                              className="flex items-center justify-center gap-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-[10px] font-bold py-2 rounded-lg transition border border-emerald-500/10"
+                            >
+                              <Camera className="w-3 h-3" />
+                              Capture Screen
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -4943,6 +4957,17 @@ export default function RushBaggageWizard() {
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <div className="flex items-center gap-2">
                 <button
+                  onClick={() => {
+                    setOcrTargetMode('table');
+                    setIsOcrCameraOpen(true);
+                  }}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-indigo-600/20 border border-indigo-500/20 hover:bg-indigo-600/30 text-indigo-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition group"
+                  title="Scan Document with Camera"
+                >
+                  <Camera className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                  Smart Scan
+                </button>
+                <button
                   onClick={exportToExcel}
                   className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
                   title="Download Excel Report"
@@ -4951,16 +4976,14 @@ export default function RushBaggageWizard() {
                   Excel
                 </button>
                 
-                {isMobile && (
-                  <button
-                    onClick={handleShareViaWhatsApp}
-                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-emerald-600/20 border border-emerald-500/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
-                    title="Share via WhatsApp/Native"
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                    Share
-                  </button>
-                )}
+                <button
+                  onClick={handleShareViaWhatsApp}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-emerald-600/20 border border-emerald-500/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold px-3 py-1.5 rounded cursor-pointer transition"
+                  title="Share via WhatsApp/Native"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  Share
+                </button>
 
                 <button
                   onClick={handleShareViaEmail}
@@ -5829,7 +5852,7 @@ export default function RushBaggageWizard() {
               {/* STEP 1: UPLOAD / RAW PASTE SOURCE */}
               {importWizardStep === 'upload' && (
                 <div className="space-y-6">
-                  <div className={`grid grid-cols-1 ${isMobile ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4 text-xs`}>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
                     <button
                       onClick={() => setImportTab('paste')}
                       className={`p-4 rounded-xl border text-left transition relative ${
@@ -5864,24 +5887,22 @@ export default function RushBaggageWizard() {
                       </p>
                     </button>
 
-                    {isMobile && (
-                      <button
-                        onClick={() => {
-                          setShowImportDialog(false);
-                          setOcrTargetMode('table');
-                          cameraInputRef.current?.click();
-                        }}
-                        className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-950/20 text-indigo-200 text-left transition relative"
-                      >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <Camera className="w-4 h-4 text-indigo-400" />
-                          <span className="font-bold text-slate-200">Option 3: Camera Capture</span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 leading-relaxed">
-                          Photograph a printed baggage list or screen. Gemini AI will convert the image into structured data.
-                        </p>
-                      </button>
-                    )}
+                    <button
+                      onClick={() => {
+                        setShowImportDialog(false);
+                        setOcrTargetMode('table');
+                        setIsOcrCameraOpen(true);
+                      }}
+                      className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-950/20 text-indigo-200 text-left transition relative hover:bg-indigo-900/30"
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Camera className="w-4 h-4 text-indigo-400" />
+                        <span className="font-bold text-slate-200">Option 3: Camera Capture</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Photograph a printed baggage list or screen. Gemini AI will convert the image into structured data.
+                      </p>
+                    </button>
                   </div>
 
                   {/* Duplicate Resolution Setting */}
@@ -6418,7 +6439,7 @@ export default function RushBaggageWizard() {
                     onClick={() => {
                       setShowSBHInstructions(false);
                       setOcrTargetMode('table');
-                      cameraInputRef.current?.click();
+                      setIsOcrCameraOpen(true);
                     }}
                     className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-amber-600/20 group"
                   >
@@ -6507,7 +6528,7 @@ export default function RushBaggageWizard() {
                     onClick={() => {
                       setShowAlteaInstructions(false);
                       setOcrTargetMode('altea');
-                      cameraInputRef.current?.click();
+                      setIsOcrCameraOpen(true);
                     }}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition shadow-lg shadow-indigo-600/20 group"
                   >
@@ -8146,6 +8167,16 @@ export default function RushBaggageWizard() {
         isContinuous={scannerTargetField === 'bulk'}
         continuousCount={continuousScannedTags.length}
         onFinishContinuous={handleFinishContinuous}
+      />
+
+      {/* LIVE OCR CAMERA MODAL */}
+      <OcrCameraModal
+        isOpen={isOcrCameraOpen}
+        onClose={() => setIsOcrCameraOpen(false)}
+        onCapture={(base64Image) => {
+          processOcrImage(base64Image);
+        }}
+        mode={ocrTargetMode}
       />
 
       {/* DUPLICATE RESOLVER MODAL */}

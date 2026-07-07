@@ -39,8 +39,10 @@ export async function POST(req: NextRequest) {
     } else {
       // Table mode for BDO/SBH
       prompt = `Extract the baggage list from this document. 
+      The document is an Excel sheet printout or a screen showing a table of baggage data.
       Convert the table into a structured JSON array of objects. 
-      Identify columns such as Flight, Date, Tag, Name, Weight, Status, Remarks.
+      Identify columns such as Flight, Date, Tag (10-digit or airline format), Name, Weight, Status, and Remarks.
+      Be precise with numbers and codes.
       If a column is missing, omit it. 
       Return only the JSON data.`;
       
