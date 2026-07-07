@@ -18,15 +18,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
-    // Remove base64 prefix if present
+    // Determine MIME type dynamically and remove prefix
+    const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
     const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
-
-    const imagePart = {
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: base64Data,
-      },
-    };
 
     let prompt = "";
     let responseSchema = undefined;
@@ -43,8 +38,7 @@ export async function POST(req: NextRequest) {
       Convert the table into a structured JSON array of objects. 
       Identify columns such as Flight, Date, Tag (10-digit or airline format), Name, Weight, Status, and Remarks.
       Be precise with numbers and codes.
-      If a column is missing, omit it.
-      For each row, assess your OCR confidence (high, medium, low) based on the image quality, sharpness, contrast, and text readability. Identify any fields that were blurry or uncertain.
+      If a column is missing, omit it. 
       Return only the JSON data.`;
       
       responseSchema = {
@@ -59,12 +53,6 @@ export async function POST(req: NextRequest) {
             weight: { type: Type.STRING },
             rushTag: { type: Type.STRING },
             remarks: { type: Type.STRING },
-            confidence: { type: Type.STRING, description: "Overall confidence for this row: 'high', 'medium', or 'low'" },
-            lowConfidenceFields: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "List of field names in this object that are blurry or hard to recognize (e.g., ['originalTag', 'name'])"
-            }
           }
         }
       };
@@ -72,10 +60,12 @@ export async function POST(req: NextRequest) {
 
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
-      contents: [
-        { inlineData: { mimeType: "image/jpeg", data: base64Data } },
-        { text: prompt }
-      ],
+      contents: {
+        parts: [
+          { inlineData: { mimeType: mimeType, data: base64Data } },
+          { text: prompt }
+        ]
+      },
       config: responseSchema ? {
         responseMimeType: "application/json",
         responseSchema: responseSchema
@@ -86,8 +76,19 @@ export async function POST(req: NextRequest) {
     
     if (responseSchema && text) {
         try {
-            return NextResponse.json({ data: JSON.parse(text) });
+            let cleanText = text.trim();
+            if (cleanText.startsWith("```json")) {
+                cleanText = cleanText.substring(7);
+            } else if (cleanText.startsWith("```")) {
+                cleanText = cleanText.substring(3);
+            }
+            if (cleanText.endsWith("```")) {
+                cleanText = cleanText.substring(0, cleanText.length - 3);
+            }
+            cleanText = cleanText.trim();
+            return NextResponse.json({ data: JSON.parse(cleanText) });
         } catch (e) {
+            console.error("Failed to parse Gemini response as JSON:", text, e);
             return NextResponse.json({ text: text });
         }
     }
