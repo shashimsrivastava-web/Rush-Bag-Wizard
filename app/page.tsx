@@ -8173,8 +8173,24 @@ export default function RushBaggageWizard() {
       <OcrCameraModal
         isOpen={isOcrCameraOpen}
         onClose={() => setIsOcrCameraOpen(false)}
-        onCapture={(base64Image) => {
-          processOcrImage(base64Image);
+        onImportText={(text) => {
+          setRawAlteaText(text);
+          setShowAlteaPasteWindow(true);
+        }}
+        onImportTable={(data) => {
+          const headers = ['Flight No', 'Date', 'Original Tag', 'Passenger Name', 'Weight', 'Rush Status', 'Remarks'];
+          const rows = data.map((obj: any) => [
+            obj.flightNo || '',
+            obj.receivedAt || '',
+            obj.originalTag || '',
+            obj.name || '',
+            obj.weight || '',
+            obj.rushTag || '',
+            obj.remarks || ''
+          ]);
+          setIsSBHImport(false);
+          analyzeGrid([headers, ...rows]);
+          setShowImportDialog(true);
         }}
         mode={ocrTargetMode}
       />

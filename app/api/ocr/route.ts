@@ -43,7 +43,8 @@ export async function POST(req: NextRequest) {
       Convert the table into a structured JSON array of objects. 
       Identify columns such as Flight, Date, Tag (10-digit or airline format), Name, Weight, Status, and Remarks.
       Be precise with numbers and codes.
-      If a column is missing, omit it. 
+      If a column is missing, omit it.
+      For each row, assess your OCR confidence (high, medium, low) based on the image quality, sharpness, contrast, and text readability. Identify any fields that were blurry or uncertain.
       Return only the JSON data.`;
       
       responseSchema = {
@@ -58,6 +59,12 @@ export async function POST(req: NextRequest) {
             weight: { type: Type.STRING },
             rushTag: { type: Type.STRING },
             remarks: { type: Type.STRING },
+            confidence: { type: Type.STRING, description: "Overall confidence for this row: 'high', 'medium', or 'low'" },
+            lowConfidenceFields: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "List of field names in this object that are blurry or hard to recognize (e.g., ['originalTag', 'name'])"
+            }
           }
         }
       };
